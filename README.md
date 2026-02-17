@@ -1,6 +1,6 @@
 # Koi 🐠
 
-Terminal-based AI agent with memory, tool calling, skills, and system cron integration. Built for developers who want a powerful AI assistant that lives in their terminal.
+Terminal-based AI agent with memory, tool calling, skills, sandbox security, and system cron integration. Built for developers who want a powerful AI assistant that lives in their terminal.
 
 ## Features
 
@@ -8,6 +8,8 @@ Terminal-based AI agent with memory, tool calling, skills, and system cron integ
 - **Tool Integration**: Read/write files, execute commands, fetch web content, and more
 - **Persistent Memory**: Remember important context between sessions
 - **Skills System**: Extensible capabilities through markdown-based skill definitions
+- **Alerts System**: Structured alerts with severity levels and desktop notifications
+- **Sandbox Security**: Credential protection, env scrubbing, and file access control
 - **Cron Integration**: Schedule AI tasks to run automatically
 - **Context Management**: Smart conversation compaction to stay within token limits
 - **Rich Terminal UI**: Beautiful output with streaming responses and colored text
@@ -18,7 +20,7 @@ Terminal-based AI agent with memory, tool calling, skills, and system cron integ
 
 ```bash
 cd ~/koi
-pip install -e .
+pip install .
 ```
 
 ### Initialize a Project
@@ -29,10 +31,11 @@ koi init
 ```
 
 This creates a `.agent/` directory with:
-- `config.json` - API settings and configuration
-- `MEMORY.md` - Persistent memory file
-- `AGENTS.md` - Project-specific instructions
-- `cron-logs/` - Directory for scheduled task logs
+- `config.json` — API settings and configuration
+- `sandbox.yaml` — Security sandbox rules
+- `MEMORY.md` — Persistent memory file
+- `AGENTS.md` — Project-specific instructions
+- `cron-logs/` — Directory for scheduled task logs
 
 ### Configure API Access
 
@@ -58,236 +61,207 @@ koi run
 
 ## Commands
 
-### CLI Commands
+### CLI
 
-- `koi init` - Initialize .agent directory
-- `koi run` - Start interactive session
-- `koi run --task "..." --non-interactive` - Run specific task (for cron)
-- `koi cron add "0 9 * * *" "Check emails"` - Schedule task
-- `koi cron list` - List scheduled tasks
-- `koi cron remove <id>` - Remove scheduled task
-- `koi skills` - List available skills
-- `koi config` - Show current configuration
-- `koi memory` - Show current memory
+| Command | Description |
+|---------|-------------|
+| `koi init` | Initialize `.agent/` directory |
+| `koi run` | Start interactive session |
+| `koi run --task "..." --non-interactive` | Run a task and exit (for cron/scripts) |
+| `koi cron add "0 9 * * *" "Check emails"` | Schedule a recurring task |
+| `koi cron list` | List scheduled tasks |
+| `koi cron remove <id>` | Remove a scheduled task |
+| `koi skills` | List available skills |
+| `koi config` | Show current configuration |
+| `koi memory` | Show current memory |
 
 ### Chat Commands
 
 During a `koi run` session:
 
-- `/exit`, `/quit` - Exit the session
-- `/memory` - Show current memory
-- `/remember TEXT` - Add text to memory
-- `/skills` - List available skills
-- `/compact` - Force conversation compaction
-- `/stats` - Show context usage statistics
-- `/help` - Show help
+| Command | Description |
+|---------|-------------|
+| `/exit`, `/quit` | Exit the session |
+| `/memory` | Show current memory |
+| `/remember TEXT` | Add text to memory |
+| `/skills` | List available skills |
+| `/compact` | Force conversation compaction |
+| `/stats` | Show context usage statistics |
+| `/help` | Show help |
 
-## Architecture
+## Tools
 
-### Core Components
+| Tool | Description |
+|------|-------------|
+| `read_file` | Read file contents (with offset/limit) |
+| `write_file` | Create or overwrite files |
+| `edit_file` | Surgical find-and-replace edits |
+| `exec_command` | Execute shell commands (sandboxed) |
+| `web_fetch` | Fetch and convert web pages to markdown |
+| `web_search` | Web search (placeholder — TODO) |
+| `update_memory` | Persist info across sessions |
+| `read_skill` | Load skill definitions by name |
+| `create_alert` | Create structured alerts with desktop notifications |
+| `list_alerts` | List alerts filtered by status |
+| `resolve_alert` | Approve or dismiss alerts |
 
-- **Agent** (`agent.py`) - Main conversation loop and coordination
-- **LLM Client** (`llm.py`) - OpenAI-compatible API client with streaming
-- **Tools** (`tools.py`) - Function definitions and execution
-- **Memory** (`memory.py`) - Persistent memory management
-- **Skills** (`skills.py`) - Skill discovery and loading
-- **Cron** (`cron.py`) - System crontab integration
-- **Compaction** (`compaction.py`) - Context window management
+## Sandbox Security
 
-### Available Tools
+Koi includes a sandbox that prevents accidental credential leaks and destructive actions. Configuration lives in `.agent/sandbox.yaml` and is loaded automatically on every run.
 
-1. **read_file** - Read file contents (with offset/limit for large files)
-2. **write_file** - Create or overwrite files
-3. **edit_file** - Make surgical edits to files
-4. **exec_command** - Execute shell commands (with safety checks)
-5. **web_search** - Search the web (placeholder - TODO)
-6. **web_fetch** - Fetch and convert web pages to markdown
-7. **read_skill** - Load skill definitions by name
+### Three Layers of Protection
+
+**1. File Access Control**
+
+```yaml
+filesystem:
+  allowed_paths:
+    - "."              # Only the project directory
+  blocked_paths:
+    - "~/.aws"         # AWS credentials
+    - "~/.ssh"         # SSH keys
+    - "~/.config"      # App configs & tokens
+```
+
+File reads/writes outside allowed paths are denied. Blocked paths are denied even if you expand allowed paths later.
+
+**2. Environment Scrubbing**
+
+```yaml
+environment:
+  allowlist:
+    - PATH
+    - HOME
+    - USER
+    - SHELL
+    - LANG
+    - TERM
+    # ... safe vars only
+```
+
+Shell commands only receive allowlisted environment variables. API keys, cloud credentials, and tokens are stripped — so even `echo $OPENAI_API_KEY` returns nothing.
+
+**3. Command Blocking**
+
+```yaml
+commands:
+  blocked_patterns:
+    - 'rm\s+-rf\s+/'          # Nuke from orbit
+    - 'DROP\s+TABLE'           # SQL destruction
+    - 'aws\s+iam'              # IAM changes
+  confirm_patterns:
+    - 'rm\s+'                  # Needs confirmation
+    - 'git\s+push\s+.*--force' # Force push
+```
+
+Dangerous commands are hard-blocked. Risky commands are flagged for user confirmation.
+
+### Customization
+
+Edit `.agent/sandbox.yaml` to adjust rules for your project. The defaults are secure but not overly restrictive.
+
+## Alerts System
+
+Koi can create, track, and resolve structured alerts — useful for monitoring tasks.
+
+```
+koi> Read the logs and create alerts for any errors
+🔧 read_file mock/logs/latest.log
+🔧 create_alert "DB pool overloaded" severity=critical
+🔧 create_alert "Auth retry storm" severity=high
+```
+
+Alerts are saved as markdown files in `.agent/alerts/` and trigger desktop notifications (macOS/Linux). On startup, koi shows a count of pending alerts so nothing gets missed.
+
+### Alert Workflow
+
+1. **Create** — Koi detects issues and creates alerts with severity + proposed fix
+2. **Review** — `list_alerts` shows pending alerts
+3. **Resolve** — `resolve_alert` approves or dismisses; approved alerts return their fix command
 
 ## Skills System
 
-Skills are defined in `SKILL.md` files that the agent can discover and load:
+Skills are markdown files that teach koi how to handle specific tasks:
 
-```markdown
-# Example Skill
-
-This skill demonstrates how to do something useful.
-
-## Usage
-
-Explain how to use this skill...
-
-## Examples
-
-Show examples...
+```
+skills/
+└── log-monitor/
+    └── SKILL.md
 ```
 
-Skills are discovered from paths in `config.skills_paths` and listed in the system prompt. The agent can read full skill content using the `read_skill` tool when needed.
+Skills are discovered from paths in `config.skills_paths` and listed in the system prompt. The agent loads full skill content on demand via `read_skill`.
 
 ## Memory System
 
-Koi maintains persistent memory across sessions:
-
-- **MEMORY.md** - Long-term memory that persists between sessions
-- **Context** - Current conversation context with automatic compaction
-- **Memory Commands** - Use `/remember` to add important information
+- **MEMORY.md** — Long-term memory that persists between sessions
+- **Context Compaction** — When conversations get long, koi summarizes older messages to stay within the context window
+- **`/remember`** — Quick way to save important info during a session
+- **`update_memory`** — Tool the agent can use proactively
 
 ## Cron Integration
 
-Schedule AI tasks to run automatically:
+Schedule AI tasks to run automatically via system crontab:
 
 ```bash
-# Check emails every morning
-koi cron add "0 9 * * *" "Check my emails and summarize any urgent ones"
+# Check logs every hour
+koi cron add "0 * * * *" "Read mock/logs/latest.log and create alerts for errors"
 
-# Weekly project status
-koi cron add "0 17 * * 5" "Review this week's commits and create a status report"
+# Daily standup
+koi cron add "0 9 * * 1-5" "Review yesterday's commits and plan today"
 ```
 
-Cron jobs run `koi run --task "..." --non-interactive` and log output to `.agent/cron-logs/`.
+Cron jobs use the full path to `koi` (resolved via `shutil.which`) so they work correctly in cron's minimal environment. Output goes to `.agent/cron-logs/`.
 
-## Configuration
-
-### Environment Variables
-
-- `OPENAI_API_KEY` - API key (can also be set in config.json)
-
-### Config Options
-
-- `api_base` - API endpoint URL
-- `api_key` - API key for authentication
-- `model` - Model to use (e.g., "gpt-5.2", "gpt-4o", "claude-3-sonnet")
-- `max_tokens` - Maximum tokens per response
-- `context_window` - Total context window size
-- `skills_paths` - Directories to search for skills
-- `temperature` - Response randomness (0.0-1.0)
-
-## Project Structure
+## Architecture
 
 ```
-koi/
-├── src/koi/
-│   ├── __init__.py
-│   ├── __main__.py      # CLI entry point
-│   ├── cli.py           # CLI command definitions
-│   ├── agent.py         # Main agent loop
-│   ├── llm.py           # LLM client
-│   ├── tools.py         # Tool definitions
-│   ├── memory.py        # Memory management
-│   ├── skills.py        # Skills system
-│   ├── cron.py          # Cron integration
-│   ├── config.py        # Configuration
-│   ├── compaction.py    # Context management
-│   └── prompts.py       # System prompt building
-├── tests/               # Test suite
-├── pyproject.toml       # Project metadata
-└── README.md           # This file
+src/koi/
+├── __main__.py      # Entry point
+├── cli.py           # CLI commands (init, run, cron, etc.)
+├── agent.py         # Main conversation loop
+├── llm.py           # OpenAI-compatible API client with streaming
+├── tools.py         # Tool definitions and execution
+├── sandbox.py       # Security sandbox enforcement
+├── memory.py        # Persistent memory
+├── skills.py        # Skill discovery and loading
+├── cron.py          # System crontab integration
+├── config.py        # Configuration management
+├── compaction.py    # Context window management
+└── prompts.py       # System prompt building
 ```
 
-## Per-Project Structure
-
-When you run `koi init` in a project:
+### Per-Project Structure
 
 ```
 your-project/
 ├── .agent/
-│   ├── config.json      # Project-specific config
+│   ├── config.json      # API settings
+│   ├── sandbox.yaml     # Security rules
 │   ├── MEMORY.md        # Persistent memory
 │   ├── AGENTS.md        # Project instructions
+│   ├── alerts/          # Alert files
 │   ├── crontab.json     # Cron job metadata
 │   └── cron-logs/       # Scheduled task logs
 └── skills/              # Project-specific skills (optional)
 ```
 
-## Safety
-
-Koi includes safety features:
-
-- **Command Validation** - Dangerous commands require manual confirmation
-- **Sandboxing** - Operates within current working directory by default
-- **Audit Trail** - All tool calls and results are logged in conversation
-- **Memory Control** - You control what gets remembered
-
 ## Development
 
-### Setup Development Environment
-
 ```bash
-cd ~/koi
-pip install -e ".[dev]"
-```
+# Install with dev dependencies
+pip install ".[dev]"
 
-### Run Tests
-
-```bash
+# Run tests
 pytest tests/
-```
 
-### Code Formatting
-
-```bash
+# Format & lint
 black src/ tests/
 ruff check src/ tests/
 ```
 
-## Examples
-
-### Basic Usage
-
-```bash
-$ koi run
-🐠 Koi Agent - Ready to help!
-
-koi> What files are in this directory?
-🔧 exec_command...
-This directory contains:
-- README.md
-- pyproject.toml  
-- src/
-- tests/
-
-koi> Create a Python script that prints "Hello, World!"
-🔧 write_file...
-I've created hello.py with a simple "Hello, World!" script.
-
-koi> /remember This project uses koi for automation
-✅ Added to memory
-```
-
-### Scheduled Tasks
-
-```bash
-# Daily standup reminder
-koi cron add "0 9 * * 1-5" "Review yesterday's work and plan today's tasks"
-
-# Weekly cleanup
-koi cron add "0 18 * * 5" "Clean up temporary files and organize the workspace"
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Run the test suite
-6. Submit a pull request
-
 ## License
 
-MIT License - see LICENSE file for details.
-
-## Changelog
-
-### v0.1.0 - Initial Release
-
-- Core agent functionality
-- Tool system with file operations and command execution
-- Memory management
-- Skills system
-- Cron integration
-- Context compaction
-- Rich terminal UI
+MIT
 
 ---
 

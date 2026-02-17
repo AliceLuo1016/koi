@@ -62,6 +62,59 @@ def init(force: bool):
         with open(agents_path, "w") as f:
             f.write("# Project Instructions\n\nSpecial instructions for this project go here.\n")
     
+    # Create default sandbox config
+    sandbox_path = agent_dir / "sandbox.yaml"
+    if not sandbox_path.exists() or force:
+        with open(sandbox_path, "w") as f:
+            f.write("""# Sandbox Security Configuration
+# Controls what koi can access to prevent catastrophic mistakes
+
+filesystem:
+  # Directories koi can read/write freely (relative to project root)
+  allowed_paths:
+    - "."
+
+  # Extra read-only paths
+  readonly_paths:
+    - "/usr/local"
+    - "/opt/homebrew"
+
+  # Blocked paths — NEVER accessible, even via shell commands
+  blocked_paths:
+    - "~/.aws"
+    - "~/.ssh"
+    - "~/.config"
+
+# Environment variable control for shell commands
+environment:
+  allowlist:
+    - PATH
+    - HOME
+    - USER
+    - SHELL
+    - LANG
+    - LC_ALL
+    - TERM
+    - EDITOR
+    - TMPDIR
+    - PYTHONPATH
+    - VIRTUAL_ENV
+    - NODE_PATH
+
+# Shell command restrictions
+commands:
+  blocked_patterns:
+    - 'rm\\s+-rf\\s+/'
+    - 'sudo\\s+rm\\s+-rf'
+    - 'mkfs\\.'
+    - 'dd\\s+if=.*of=/dev/'
+    - 'DROP\\s+TABLE'
+    - 'DROP\\s+DATABASE'
+  confirm_patterns:
+    - 'rm\\s+'
+    - 'git\\s+push\\s+.*--force'
+""")
+    
     console.print("✅ Initialized .agent directory", style="green")
     console.print(f"📝 Edit {config_path} to configure your API settings", style="yellow")
 
