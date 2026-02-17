@@ -1,6 +1,8 @@
 """System crontab management for koi agent."""
 
 import json
+import re
+import shutil
 import subprocess
 import uuid
 from datetime import datetime
@@ -32,15 +34,24 @@ class CronManager:
         # Get current working directory
         project_path = Path.cwd().absolute()
         
-        # Create log filename with date
-        log_filename = f"{datetime.now().strftime('%Y-%m-%d')}.log"
+        # Log filename format: DATE_taskname.log (lowercase, sanitized)
+        safe_task_name = re.sub(r'[^\w\-]', '_', task).lower()[:50].strip('_')
+        log_filename = f"{datetime.now().strftime('%Y-%m-%d')}_{safe_task_name}.log"
         log_path = self.logs_dir / log_filename
         
-        # Build cron command
+        # Find full path to koi binary
+        koi_path = shutil.which("koi")
+        if not koi_path:
+            raise RuntimeError("Could not find 'koi' in PATH. Make sure koi is installed and accessible.")
+        
+        # Escape single quotes in task for shell safety
+        escaped_task = task.replace("'", "'\\''")
+        
+        # Build cron command with full path (use single quotes to avoid nested quote issues)
         cron_command = (
-            f'{schedule} cd {project_path} && '
-            f'koi run --task "{task}" --non-interactive '
-            f'>> {log_path} 2>&1'
+            f"{schedule} cd {project_path} && "
+            f"{koi_path} run --task '{escaped_task}' --non-interactive "
+            f">> {log_path} 2>&1"
         )
         
         # Add job to system crontab

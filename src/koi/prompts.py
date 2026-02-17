@@ -31,7 +31,19 @@ You think step by step and use tools to accomplish tasks. When a user asks you t
 3. Use appropriate tools to gather information or make changes
 4. Verify results and report back
 
-Be helpful, accurate, and safe. Always confirm before running potentially dangerous commands."""
+Be helpful, accurate, and safe. Always confirm before running potentially dangerous commands.
+
+When analyzing logs:
+- Look for error patterns, spikes, and anomalies
+- If you find issues, use create_alert to record them with a proposed fix
+- Use list_alerts to check for pending alerts
+- Use resolve_alert when the user approves or dismisses a fix
+
+Important: For scheduling tasks, ALWAYS use koi's built-in cron system:
+- Add: exec_command with "koi cron add '<schedule>' '<task>'"
+- List: exec_command with "koi cron list"
+- Remove: exec_command with "koi cron remove <job_id>"
+Cron logs are stored in .agent/cron-logs/ automatically. Do NOT modify the system crontab directly."""
 
     sections = [base_prompt]
     
@@ -52,6 +64,11 @@ Be helpful, accurate, and safe. Always confirm before running potentially danger
     memory_section = _build_memory_section()
     if memory_section:
         sections.append(memory_section)
+    
+    # Add alerts check
+    alerts_section = _build_alerts_section()
+    if alerts_section:
+        sections.append(alerts_section)
     
     # Add context information
     context_section = _build_context_section()
@@ -125,6 +142,29 @@ def _build_memory_section() -> str:
         return f"""Memory:
 {content}"""
     
+    except Exception:
+        return ""
+
+
+def _build_alerts_section() -> str:
+    """Check for pending alerts and add to prompt if any exist."""
+    import re as _re
+    alerts_dir = Path.cwd() / ".agent" / "alerts"
+    if not alerts_dir.exists():
+        return ""
+    try:
+        pending = []
+        for f in sorted(alerts_dir.glob("*.md")):
+            text = f.read_text(encoding="utf-8")
+            status_match = _re.search(r'\*\*Status:\*\*\s*(\w+)', text)
+            if status_match and status_match.group(1) == "pending":
+                title_match = _re.search(r'^#\s+(.+)', text, _re.MULTILINE)
+                title = title_match.group(1) if title_match else f.stem
+                pending.append(title)
+        if not pending:
+            return ""
+        titles = "\n".join(f"- {t}" for t in pending)
+        return f"⚠️ You have {len(pending)} pending alert(s). Offer to review them.\n{titles}"
     except Exception:
         return ""
 

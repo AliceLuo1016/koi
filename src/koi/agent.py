@@ -14,6 +14,7 @@ from .config import Config
 from .llm import LLMClient
 from .memory import Memory
 from .skills import SkillsManager
+from .sandbox import Sandbox
 from .tools import ToolExecutor, get_tool_definitions
 from .prompts import build_system_prompt, build_tool_call_message, build_tool_result_message
 from .compaction import ContextCompactor
@@ -30,7 +31,8 @@ class Agent:
         self.llm_client = LLMClient(config)
         self.memory = Memory()
         self.skills_manager = SkillsManager(config.skills_paths)
-        self.tool_executor = ToolExecutor(self.skills_manager)
+        self.sandbox = Sandbox()
+        self.tool_executor = ToolExecutor(self.skills_manager, self.sandbox)
         self.compactor = ContextCompactor(self.llm_client, config.context_window)
         
         self.messages: List[Dict[str, Any]] = []
@@ -134,12 +136,28 @@ class Agent:
                     
                     # Execute tools
                     for tool_call in message["tool_calls"]:
+                        func_name = tool_call["function"]["name"]
                         if not non_interactive:
-                            func_name = tool_call["function"]["name"]
-                            console.print(f"🔧 {func_name}...", style="dim cyan")
+                            # Show tool name and arguments
+                            try:
+                                args = json.loads(tool_call["function"]["arguments"])
+                                args_summary = ", ".join(f"{k}={repr(v)[:60]}" for k, v in args.items())
+                                console.print(f"🔧 {func_name}({args_summary})", style="dim cyan")
+                            except Exception:
+                                console.print(f"🔧 {func_name}...", style="dim cyan")
                         
                         # Execute tool
                         result = await self.tool_executor.execute_tool(tool_call)
+                        
+                        # Show errors and key results to the user
+                        if not non_interactive:
+                            if not result.get("success", True):
+                                error_msg = result.get("error", "Unknown error")
+                                console.print(f"  ❌ {error_msg}", style="red")
+                            elif result.get("exit_code", 0) != 0:
+                                console.print(f"  ⚠️ Exit code {result['exit_code']}", style="yellow")
+                                if result.get("stderr"):
+                                    console.print(f"  {result['stderr'][:200]}", style="dim red")
                         
                         # Add tool result message
                         tool_result_msg = build_tool_result_message(tool_call, result)
