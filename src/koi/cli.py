@@ -42,6 +42,7 @@ def init(force: bool):
     # Create .agent directory structure
     agent_dir.mkdir(exist_ok=True)
     (agent_dir / "cron-logs").mkdir(exist_ok=True)
+    (agent_dir / "credentials").mkdir(exist_ok=True)
     
     # Create default config
     config_path = agent_dir / "config.json"
