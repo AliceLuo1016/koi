@@ -8,8 +8,12 @@ List Lepton jobs for the current user.
    - `username=$(whoami)`
 2. Run:
    - `uv run lep job list -u $username`
+   - If you need to **parse the output**, force non-truncated rows first:
+     - `COLUMNS=300 RICH_DISABLE=1 uv run lep job list -u $username`
+   - When the user asks about a **subset** (e.g., filtering, splitting, dedup), use the name filter with the substring:
+     - `COLUMNS=300 RICH_DISABLE=1 uv run lep job list -u $username -n <substring>`
 3. Provide a concise **summary**:
-   - Total jobs
+   - Total jobs (or total matching the substring if filtered)
    - Counts by state in this order: Running, Queueing, Completed, Failed, Stopped
    - **Job-name breakdown** (grouped by job name prefix) with counts by state in the same order
    - Include the resource utilization summary if present (report **nodes occupied**, summing the Workers column)

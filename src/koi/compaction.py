@@ -48,35 +48,50 @@ class ContextCompactor:
         
         return estimated_tokens > threshold
     
+    def _safe_split_index(self, messages: List[Dict[str, Any]], split_index: int) -> int:
+        """Adjust split index so it never lands between a tool call and its results.
+
+        If the message at split_index is a tool result, walk backward to include
+        the preceding assistant message with tool_calls on the keep side.
+        """
+        while split_index > 1 and messages[split_index].get("role") == "tool":
+            split_index -= 1
+        return split_index
+
     async def compact_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Compact messages by summarizing the oldest 40%."""
         if len(messages) <= 3:  # Keep at least system prompt and recent messages
             return messages
-        
+
         # Calculate split point (40% of messages)
         split_index = max(1, int(len(messages) * 0.4))  # Keep at least the system message
-        
+
+        # Ensure we don't split in the middle of a tool call/result pair
+        split_index = self._safe_split_index(messages, split_index)
+
         # Separate messages to compact vs keep
         to_compact = messages[:split_index]
         to_keep = messages[split_index:]
-        
+
         # Create summary of messages to compact
         try:
             summary = await self._create_summary(to_compact)
-            
+
             # Create summary message
             summary_message = {
                 "role": "system",
                 "content": f"[Previous conversation summary: {summary}]"
             }
-            
+
             # Return compacted conversation
             return [summary_message] + to_keep
-        
+
         except Exception as e:
             # If compaction fails, just truncate
             print(f"Warning: Compaction failed ({e}), truncating instead")
-            return messages[-int(len(messages) * 0.6):]  # Keep most recent 60%
+            fallback_index = len(messages) - int(len(messages) * 0.6)
+            fallback_index = self._safe_split_index(messages, fallback_index)
+            return messages[fallback_index:]
     
     async def _create_summary(self, messages: List[Dict[str, Any]]) -> str:
         """Create a concise summary of messages using LLM."""
