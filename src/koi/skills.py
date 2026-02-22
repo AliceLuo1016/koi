@@ -35,17 +35,20 @@ class SkillsManager:
         return skills
     
     def read_skill(self, skill_name: str) -> Optional[str]:
-        """Read the full content of a skill by name."""
+        """Read the full content of a skill by name or directory name."""
         skills = self.list_skills()
-        
+        query = skill_name.lower().strip()
+
         for skill in skills:
-            if skill["name"].lower() == skill_name.lower():
+            # Match on parsed title or parent directory name
+            dir_name = skill["path"].parent.name.lower()
+            if skill["name"].lower() == query or dir_name == query:
                 try:
                     with open(skill["path"], "r", encoding="utf-8") as f:
                         return f.read()
                 except Exception as e:
                     raise RuntimeError(f"Failed to read skill {skill_name}: {e}")
-        
+
         raise FileNotFoundError(f"Skill '{skill_name}' not found")
     
     def get_skills_summary(self) -> str:

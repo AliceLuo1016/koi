@@ -25,7 +25,7 @@ console = Console()
 class Agent:
     """Main agent class that handles conversation and tool execution."""
     
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, non_interactive: bool = False):
         """Initialize agent with configuration."""
         self.config = config
         self.llm_client = LLMClient(config)
@@ -34,27 +34,29 @@ class Agent:
         self.sandbox = Sandbox()
         self.tool_executor = ToolExecutor(self.skills_manager, self.sandbox)
         self.compactor = ContextCompactor(self.llm_client, config.context_window)
-        
+
         self.messages: List[Dict[str, Any]] = []
         self.running = False
+        self._prompt_session = None
 
-        # Set up prompt_toolkit session with custom key bindings
-        # multiline=True enables multi-line paste support
-        # Enter submits, Escape+Enter (or Alt+Enter) inserts a newline
-        bindings = KeyBindings()
+        if not non_interactive:
+            # Set up prompt_toolkit session with custom key bindings
+            # multiline=True enables multi-line paste support
+            # Enter submits, Shift+Enter inserts a newline
+            bindings = KeyBindings()
 
-        @bindings.add('enter')
-        def _(event):
-            event.current_buffer.validate_and_handle()
+            @bindings.add('enter')
+            def _(event):
+                event.current_buffer.validate_and_handle()
 
-        @bindings.add('escape', 'enter')
-        def _(event):
-            event.current_buffer.newline()
+            @bindings.add('s-enter')
+            def _(event):
+                event.current_buffer.newline()
 
-        self._prompt_session = PromptSession(key_bindings=bindings, multiline=True)
+            self._prompt_session = PromptSession(key_bindings=bindings, multiline=True)
 
         # Initialize with system prompt
-        system_prompt = build_system_prompt(config)
+        system_prompt = build_system_prompt(config, non_interactive=non_interactive)
         self.messages.append({
             "role": "system",
             "content": system_prompt
@@ -68,7 +70,7 @@ class Agent:
         signal.signal(signal.SIGINT, self._signal_handler)
         
         console.print("🐠 [bold cyan]Koi Agent[/bold cyan] - Ready to help!", style="bold")
-        console.print("Type '/exit' to quit, '/help' for commands, Escape+Enter for newline\n")
+        console.print("Type '/exit' to quit, '/help' for commands, Shift+Enter for newline\n")
         
         try:
             while self.running:
@@ -104,7 +106,13 @@ class Agent:
     
     async def run_task(self, task: str, non_interactive: bool = False):
         """Run a specific task (for cron jobs)."""
-        if not non_interactive:
+        if non_interactive:
+            from datetime import datetime
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            print(f"\n{'='*60}")
+            print(f"[{timestamp}] Cron task started: {task}")
+            print(f"{'='*60}")
+        else:
             console.print(f"🐠 [bold cyan]Koi Agent[/bold cyan] - Running task: {task}")
         
         # Add task as user message
@@ -123,6 +131,10 @@ class Agent:
     async def _agent_loop(self, non_interactive: bool = False):
         """Main agent thinking loop."""
         tools = get_tool_definitions()
+        if non_interactive:
+            # Hide cron tools in non-interactive mode to prevent recursive scheduling
+            cron_tool_names = {"add_cron_job", "list_cron_jobs", "remove_cron_job"}
+            tools = [t for t in tools if t["function"]["name"] not in cron_tool_names]
         
         while True:
             # Check if compaction is needed
@@ -296,6 +308,10 @@ Just type your requests normally and I'll help you with tasks using available to
         console.print(help_text)
     
     def _signal_handler(self, signum, frame):
-        """Handle SIGINT (Ctrl+C) gracefully."""
-        console.print("\n🔄 Shutting down gracefully...", style="yellow")
+        """Handle SIGINT (Ctrl+C). First press: graceful, second: force exit."""
+        if not self.running:
+            # Already shutting down — force exit immediately
+            console.print("\n👋 Force quit.", style="yellow")
+            raise SystemExit(0)
+        console.print("\n🔄 Shutting down... (press Ctrl+C again to force quit)", style="yellow")
         self.running = False

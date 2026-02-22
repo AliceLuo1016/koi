@@ -140,6 +140,47 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "add_cron_job",
+                "description": "Add a koi cron job that runs a natural language task on a schedule. The task will be interpreted by koi each time it runs.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "schedule": {"type": "string", "description": "Cron schedule expression, e.g. '0 * * * *' for every hour"},
+                        "task": {"type": "string", "description": "Natural language task for koi to interpret and execute each time"}
+                    },
+                    "required": ["schedule", "task"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_cron_jobs",
+                "description": "List all registered koi cron jobs.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "remove_cron_job",
+                "description": "Remove a koi cron job by its ID.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "job_id": {"type": "string", "description": "The job ID to remove"}
+                    },
+                    "required": ["job_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "create_alert",
                 "description": "Create a structured alert with severity and proposed fix. Saves to .agent/alerts/ and sends a desktop notification.",
                 "parameters": {
@@ -224,6 +265,12 @@ class ToolExecutor:
                 return await self._update_memory(**arguments)
             elif function_name == "read_skill":
                 return await self._read_skill(**arguments)
+            elif function_name == "add_cron_job":
+                return await self._add_cron_job(**arguments)
+            elif function_name == "list_cron_jobs":
+                return await self._list_cron_jobs(**arguments)
+            elif function_name == "remove_cron_job":
+                return await self._remove_cron_job(**arguments)
             elif function_name == "create_alert":
                 return await self._create_alert(**arguments)
             elif function_name == "list_alerts":
@@ -451,6 +498,40 @@ class ToolExecutor:
         
         except FileNotFoundError as e:
             return {"error": str(e), "success": False}
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _add_cron_job(self, schedule: str, task: str) -> Dict[str, Any]:
+        """Add a cron job via CronManager directly."""
+        try:
+            from .cron import CronManager
+            cron_manager = CronManager()
+            job_id = cron_manager.add_job(schedule, task)
+            return {
+                "message": f"Cron job added (ID: {job_id}). Schedule: {schedule}. Task: {task}",
+                "job_id": job_id,
+                "success": True
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _list_cron_jobs(self) -> Dict[str, Any]:
+        """List all cron jobs."""
+        try:
+            from .cron import CronManager
+            cron_manager = CronManager()
+            jobs = cron_manager.list_jobs()
+            return {"jobs": jobs, "count": len(jobs), "success": True}
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _remove_cron_job(self, job_id: str) -> Dict[str, Any]:
+        """Remove a cron job by ID."""
+        try:
+            from .cron import CronManager
+            cron_manager = CronManager()
+            cron_manager.remove_job(job_id)
+            return {"message": f"Cron job {job_id} removed.", "success": True}
         except Exception as e:
             return {"error": str(e), "success": False}
 

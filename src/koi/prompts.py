@@ -12,11 +12,13 @@ from .skills import SkillsManager
 from .tools import get_tool_definitions
 
 
-def build_system_prompt(config: Config) -> str:
+def build_system_prompt(config: Config, non_interactive: bool = False) -> str:
     """Build the complete system prompt for the agent."""
-    
+
     # Base agent instructions
-    base_prompt = """You are Koi, a terminal-based AI agent that helps users with tasks through conversation and tool usage.
+    base_prompt = """IMPORTANT: You MUST always respond in English, regardless of user locale or input language.
+
+You are Koi, a terminal-based AI agent that helps users with tasks through conversation and tool usage.
 
 You have access to the following capabilities:
 - Read, write, and edit files
@@ -31,7 +33,7 @@ You think step by step and use tools to accomplish tasks. When a user asks you t
 3. Use appropriate tools to gather information or make changes
 4. Verify results and report back
 
-Be helpful, accurate, and safe. Always confirm before running potentially dangerous commands.
+Be helpful, accurate, and safe. Always respond in English. Always confirm before running potentially dangerous commands.
 
 When analyzing logs:
 - Look for error patterns, spikes, and anomalies
@@ -39,11 +41,11 @@ When analyzing logs:
 - Use list_alerts to check for pending alerts
 - Use resolve_alert when the user approves or dismisses a fix
 
-Important: For scheduling tasks, ALWAYS use koi's built-in cron system:
-- Add: exec_command with "koi cron add '<schedule>' '<task>'"
-- List: exec_command with "koi cron list"
-- Remove: exec_command with "koi cron remove <job_id>"
-Cron logs are stored in .agent/cron-logs/ automatically. Do NOT modify the system crontab directly."""
+Important: For scheduling tasks, use the built-in cron tools:
+- Add: add_cron_job(schedule, task) — task is a natural language instruction koi will interpret each run
+- List: list_cron_jobs()
+- Remove: remove_cron_job(job_id)
+Cron logs are stored in .agent/cron-logs/ automatically. Do NOT use exec_command for cron management."""
 
     sections = [base_prompt]
     
@@ -70,10 +72,18 @@ Cron logs are stored in .agent/cron-logs/ automatically. Do NOT modify the syste
     if alerts_section:
         sections.append(alerts_section)
     
+    # Non-interactive mode: no confirmation needed
+    if non_interactive:
+        sections.append("""IMPORTANT: You are running in non-interactive (cron) mode. There is no user to respond.
+- Do NOT ask for confirmation or clarification. Execute all tool calls and commands directly.
+- Do NOT wait for user input. Complete the task autonomously and report the result.
+- Do NOT create or schedule cron jobs. You ARE a cron job. Just execute the task immediately.
+- Ignore phrases like "every hour" or "every minute" in the task — those describe the cron schedule, not what you should do. Focus on the actual action.""")
+
     # Add context information
     context_section = _build_context_section()
     sections.append(context_section)
-    
+
     return "\n\n".join(sections)
 
 
@@ -106,7 +116,10 @@ def _build_skills_section(config: Config) -> str:
         return f"""Skills:
 {skills_summary}
 
-IMPORTANT: To load a skill, always use the read_skill tool with the skill name (e.g. read_skill("log-monitor")). Do NOT use read_file to read skill files."""
+IMPORTANT skill rules:
+1. When a user's input matches or relates to an available skill, ALWAYS use read_skill to load it FIRST before responding, then follow its instructions exactly.
+2. To load a skill, use the read_skill tool with the skill name (e.g. read_skill("log-monitor")). Do NOT use read_file to read skill files.
+3. Match generously — e.g. "cluster usage" should trigger the cluster usage skill, "check logs" should trigger a log monitoring skill, etc."""
     
     except Exception:
         return "Skills: Error loading skills."

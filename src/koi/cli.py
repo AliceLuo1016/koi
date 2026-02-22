@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -43,6 +44,24 @@ def init(force: bool):
     agent_dir.mkdir(exist_ok=True)
     (agent_dir / "cron-logs").mkdir(exist_ok=True)
     (agent_dir / "credentials").mkdir(exist_ok=True)
+
+    # Copy bundled skills into .agent/skills/
+    skills_dir = agent_dir / "skills"
+    bundled_skills_dir = Path(__file__).parent / "bundled_skills"
+    if bundled_skills_dir.exists():
+        if skills_dir.exists() and force:
+            shutil.rmtree(skills_dir)
+        if not skills_dir.exists():
+            shutil.copytree(bundled_skills_dir, skills_dir)
+            # Remove __init__.py if copied (it's only needed for packaging)
+            init_file = skills_dir / "__init__.py"
+            if init_file.exists():
+                init_file.unlink()
+        else:
+            # Copy any new skills that don't already exist
+            for skill in bundled_skills_dir.iterdir():
+                if skill.is_dir() and not (skills_dir / skill.name).exists():
+                    shutil.copytree(skill, skills_dir / skill.name)
     
     # Create default config
     config_path = agent_dir / "config.json"
@@ -61,7 +80,7 @@ def init(force: bool):
     agents_path = agent_dir / "AGENTS.md"
     if not agents_path.exists() or force:
         with open(agents_path, "w") as f:
-            f.write("# Project Instructions\n\n## Skills\n\nAll skills live in `./skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.\n")
+            f.write("# Project Instructions\n\n## Skills\n\nAll skills live in `.agent/skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.\n")
     
     # Create default sandbox config
     sandbox_path = agent_dir / "sandbox.yaml"
@@ -134,8 +153,8 @@ def run(task: Optional[str], non_interactive: bool):
     """Start an interactive agent session or run a specific task."""
     try:
         config = Config.load()
-        agent = Agent(config)
-        
+        agent = Agent(config, non_interactive=bool(task or non_interactive))
+
         if task:
             # Run specific task and exit
             asyncio.run(agent.run_task(task, non_interactive=non_interactive))

@@ -36,6 +36,9 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/koi"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"skills" = "koi/bundled_skills"
+
 [tool.black]
 line-length = 88
 target-version = ['py39']

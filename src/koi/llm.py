@@ -45,6 +45,12 @@ class LLMClient:
 
             if role == "system":
                 instructions = msg.get("content", "")
+                # Also inject as a user message so proxies that
+                # ignore the 'instructions' field still see it.
+                input_items.insert(0, {
+                    "role": "developer",
+                    "content": msg.get("content", ""),
+                })
 
             elif role == "user":
                 input_items.append({

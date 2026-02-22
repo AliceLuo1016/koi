@@ -1,6 +1,7 @@
 """System crontab management for koi agent."""
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -47,9 +48,12 @@ class CronManager:
         # Escape single quotes in task for shell safety
         escaped_task = task.replace("'", "'\\''")
         
+        # Capture current PATH so cron has access to the same tools (uv, python, etc.)
+        current_path = os.environ.get("PATH", "/usr/bin:/bin")
+
         # Build cron command with full path (use single quotes to avoid nested quote issues)
         cron_command = (
-            f"{schedule} cd {project_path} && "
+            f"{schedule} PATH={current_path} cd {project_path} && "
             f"{koi_path} run --task '{escaped_task}' --non-interactive "
             f">> {log_path} 2>&1"
         )

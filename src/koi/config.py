@@ -24,7 +24,7 @@ class Config:
         self.model = model
         self.max_tokens = max_tokens
         self.context_window = context_window
-        self.skills_paths = skills_paths or ["./skills"]
+        self.skills_paths = skills_paths or [".agent/skills"]
         self.temperature = temperature
     
     @classmethod
@@ -45,7 +45,7 @@ class Config:
             model=data.get("model", "openai/openai/gpt-5.2-codex"),
             max_tokens=data.get("max_tokens", 4096),
             context_window=data.get("context_window", 128000),
-            skills_paths=data.get("skills_paths", ["./skills"]),
+            skills_paths=data.get("skills_paths", [".agent/skills"]),
             temperature=data.get("temperature"),
         )
     
@@ -93,5 +93,5 @@ def create_default_config() -> Dict[str, Any]:
         "model": "openai/openai/gpt-5.2-codex",
         "max_tokens": 4096,
         "context_window": 128000,
-        "skills_paths": ["./skills"],
+        "skills_paths": [".agent/skills"],
     }
