@@ -106,7 +106,7 @@ def _build_skills_section(config: Config) -> str:
         return f"""Skills:
 {skills_summary}
 
-Use the read_skill tool to load full skill content when needed."""
+IMPORTANT: To load a skill, always use the read_skill tool with the skill name (e.g. read_skill("log-monitor")). Do NOT use read_file to read skill files."""
     
     except Exception:
         return "Skills: Error loading skills."

@@ -361,7 +361,7 @@ class ToolExecutor:
                 text=True,
                 cwd=work_dir,
                 env=env,
-                executable="/bin/zsh",
+                executable="/bin/bash",
                 timeout=timeout
             )
             

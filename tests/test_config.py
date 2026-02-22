@@ -11,13 +11,13 @@ from koi.config import Config, create_default_config
 def test_config_initialization():
     """Test Config class initialization with defaults."""
     config = Config()
-    
-    assert config.api_base == "https://api.openai.com/v1"
-    assert config.model == "gpt-4o"
+
+    assert config.api_base == ""
+    assert config.model == "openai/openai/gpt-5.2-codex"
     assert config.max_tokens == 4096
     assert config.context_window == 128000
     assert config.skills_paths == ["./skills"]
-    assert config.temperature == 0.7
+    assert config.temperature is None
 
 
 def test_config_custom_values():
@@ -67,13 +67,13 @@ def test_config_load_nonexistent():
 def test_create_default_config():
     """Test creating default configuration dictionary."""
     default_config = create_default_config()
-    
-    assert default_config["api_base"] == "https://api.openai.com/v1"
-    assert default_config["model"] == "gpt-4o"
+
+    assert default_config["api_base"] == ""
+    assert default_config["model"] == "openai/openai/gpt-5.2-codex"
     assert default_config["max_tokens"] == 4096
     assert default_config["context_window"] == 128000
     assert default_config["skills_paths"] == ["./skills"]
-    assert default_config["temperature"] == 0.7
+    assert "temperature" not in default_config
 
 
 def test_config_to_dict():

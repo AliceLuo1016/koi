@@ -6,9 +6,9 @@ import signal
 import sys
 from typing import List, Dict, Any, Optional
 from rich.console import Console
-from rich.prompt import Prompt
-from rich.live import Live
 from rich.text import Text
+from prompt_toolkit import PromptSession
+from prompt_toolkit.key_binding import KeyBindings
 
 from .config import Config
 from .llm import LLMClient
@@ -37,7 +37,22 @@ class Agent:
         
         self.messages: List[Dict[str, Any]] = []
         self.running = False
-        
+
+        # Set up prompt_toolkit session with custom key bindings
+        # multiline=True enables multi-line paste support
+        # Enter submits, Escape+Enter (or Alt+Enter) inserts a newline
+        bindings = KeyBindings()
+
+        @bindings.add('enter')
+        def _(event):
+            event.current_buffer.validate_and_handle()
+
+        @bindings.add('escape', 'enter')
+        def _(event):
+            event.current_buffer.newline()
+
+        self._prompt_session = PromptSession(key_bindings=bindings, multiline=True)
+
         # Initialize with system prompt
         system_prompt = build_system_prompt(config)
         self.messages.append({
@@ -53,14 +68,17 @@ class Agent:
         signal.signal(signal.SIGINT, self._signal_handler)
         
         console.print("🐠 [bold cyan]Koi Agent[/bold cyan] - Ready to help!", style="bold")
-        console.print("Type '/exit' to quit, '/help' for commands, Ctrl+C to stop\n")
+        console.print("Type '/exit' to quit, '/help' for commands, Escape+Enter for newline\n")
         
         try:
             while self.running:
                 # Get user input
                 try:
-                    user_input = Prompt.ask("[bold blue]koi>[/bold blue]", default="").strip()
+                    user_input = (await self._prompt_session.prompt_async("koi> ")).strip()
                 except KeyboardInterrupt:
+                    console.print("\n👋 Goodbye!", style="yellow")
+                    break
+                except EOFError:
                     console.print("\n👋 Goodbye!", style="yellow")
                     break
                 
@@ -120,8 +138,9 @@ class Agent:
                     # Non-interactive mode for cron jobs
                     response = await self.llm_client.chat(self.messages, tools=tools)
                 else:
-                    # Interactive mode with streaming
-                    response = await self._stream_response(self.messages, tools)
+                    # Interactive mode with spinner
+                    with console.status("Thinking...", spinner="dots"):
+                        response = await self._stream_response(self.messages, tools)
                 
                 if not response.get("choices"):
                     console.print("❌ No response from LLM", style="red")
@@ -147,7 +166,11 @@ class Agent:
                                 console.print(f"🔧 {func_name}...", style="dim cyan")
                         
                         # Execute tool
-                        result = await self.tool_executor.execute_tool(tool_call)
+                        if non_interactive:
+                            result = await self.tool_executor.execute_tool(tool_call)
+                        else:
+                            with console.status(f"Running {func_name}...", spinner="dots"):
+                                result = await self.tool_executor.execute_tool(tool_call)
                         
                         # Show errors and key results to the user
                         if not non_interactive:
@@ -187,38 +210,20 @@ class Agent:
                 break
     
     async def _stream_response(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Stream response from LLM with live display."""
+        """Get response from LLM and display it."""
         try:
-            # First check if we'll get tool calls by making a non-streaming request
             response = await self.llm_client.chat(messages, tools=tools, stream=False)
-            
-            if response.get("choices") and response["choices"][0]["message"].get("tool_calls"):
-                # Return tool calls immediately
-                return response
-            
-            # Otherwise stream the response
-            content_text = Text()
-            
-            with Live(content_text, console=console, refresh_per_second=10) as live:
-                full_content = ""
-                
-                async for chunk in self.llm_client.stream_chat(messages, tools=tools):
-                    full_content += chunk
-                    content_text = Text(full_content)
-                    live.update(content_text)
-            
-            # Return structured response
-            return {
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "content": full_content
-                    }
-                }]
-            }
-        
+
+            # If it's a text response, print it nicely
+            if response.get("choices"):
+                msg = response["choices"][0]["message"]
+                if msg.get("content") and not msg.get("tool_calls"):
+                    console.print(Text(msg["content"]))
+
+            return response
+
         except Exception as e:
-            raise RuntimeError(f"Streaming failed: {e}")
+            raise RuntimeError(f"LLM request failed: {e}")
     
     async def _handle_command(self, command: str):
         """Handle special commands."""

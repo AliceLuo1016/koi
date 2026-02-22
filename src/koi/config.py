@@ -11,16 +11,16 @@ class Config:
     
     def __init__(
         self,
-        api_base: str = "https://api.openai.com/v1",
+        api_base: str = "",
         api_key: str = "",
-        model: str = "gpt-5.2",
+        model: str = "openai/openai/gpt-5.2-codex",
         max_tokens: int = 4096,
         context_window: int = 128000,
         skills_paths: List[str] = None,
-        temperature: float = 0.7,
+        temperature: float = None,
     ):
         self.api_base = api_base
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY", "")
+        self.api_key = api_key or os.getenv("KOI_API_KEY", "")
         self.model = model
         self.max_tokens = max_tokens
         self.context_window = context_window
@@ -40,13 +40,13 @@ class Config:
             data = json.load(f)
         
         return cls(
-            api_base=data.get("api_base", "https://api.openai.com/v1"),
+            api_base=data.get("api_base", ""),
             api_key=data.get("api_key", ""),
-            model=data.get("model", "gpt-5.2"),
+            model=data.get("model", "openai/openai/gpt-5.2-codex"),
             max_tokens=data.get("max_tokens", 4096),
             context_window=data.get("context_window", 128000),
             skills_paths=data.get("skills_paths", ["./skills"]),
-            temperature=data.get("temperature", 0.7),
+            temperature=data.get("temperature"),
         )
     
     def save(self, config_path: Path = None):
@@ -63,33 +63,35 @@ class Config:
             "max_tokens": self.max_tokens,
             "context_window": self.context_window,
             "skills_paths": self.skills_paths,
-            "temperature": self.temperature,
         }
-        
+        if self.temperature is not None:
+            data["temperature"] = self.temperature
+
         with open(config_path, "w") as f:
             json.dump(data, f, indent=2)
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
-        return {
+        d = {
             "api_base": self.api_base,
             "api_key": self.api_key,
             "model": self.model,
             "max_tokens": self.max_tokens,
             "context_window": self.context_window,
             "skills_paths": self.skills_paths,
-            "temperature": self.temperature,
         }
+        if self.temperature is not None:
+            d["temperature"] = self.temperature
+        return d
 
 
 def create_default_config() -> Dict[str, Any]:
     """Create a default configuration dictionary."""
     return {
-        "api_base": "https://api.openai.com/v1",
-        "api_key": "sk-...",
-        "model": "gpt-5.2",
+        "api_base": "",
+        "api_key": "",
+        "model": "openai/openai/gpt-5.2-codex",
         "max_tokens": 4096,
         "context_window": 128000,
         "skills_paths": ["./skills"],
-        "temperature": 0.7
     }

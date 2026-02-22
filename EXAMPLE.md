@@ -23,15 +23,17 @@ Edit `.agent/config.json`:
 
 ```json
 {
-  "api_base": "https://api.openai.com/v1",
+  "api_base": "https://api.example.com/v1/responses",
   "api_key": "your-actual-api-key-here",
-  "model": "gpt-5.2",
+  "model": "your-model-name",
   "max_tokens": 4096,
   "context_window": 128000,
   "skills_paths": ["./skills"],
   "temperature": 0.7
 }
 ```
+
+Or set `KOI_API_KEY` as an environment variable instead of putting the key in the file.
 
 ## 4. Start the agent
 
@@ -77,15 +79,19 @@ koi cron add "0 18 * * *" "Create a summary of today's work and append to weekly
 - `koi init` - Initialize .agent directory
 - `koi cron add "schedule" "task"` - Schedule tasks
 - `koi cron list` - List scheduled tasks
+- `koi cron remove <id>` - Remove a scheduled task
 - `koi skills` - List available skills
 - `koi config` - Show configuration
 - `koi memory` - Show current memory
 
 ## Chat commands (during `koi run`):
 
+- `/help` - Show help
 - `/memory` - Show memory
 - `/remember TEXT` - Add to memory
 - `/skills` - List skills
 - `/stats` - Show token usage
 - `/compact` - Compress conversation
 - `/exit` - Quit
+
+**Input:** Enter submits, Escape+Enter inserts a newline. Multi-line paste is supported.

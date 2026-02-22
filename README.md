@@ -12,7 +12,8 @@ Terminal-based AI agent with memory, tool calling, skills, sandbox security, and
 - **Sandbox Security**: Credential protection, env scrubbing, and file access control
 - **Cron Integration**: Schedule AI tasks to run automatically
 - **Context Management**: Smart conversation compaction to stay within token limits
-- **Rich Terminal UI**: Beautiful output with streaming responses and colored text
+- **Multi-line Input**: Escape+Enter for newlines, multi-line paste support via prompt_toolkit
+- **Rich Terminal UI**: Beautiful output with colored text
 
 ## Quick Start
 
@@ -43,15 +44,17 @@ Edit `.agent/config.json`:
 
 ```json
 {
-  "api_base": "https://api.openai.com/v1",
+  "api_base": "https://api.example.com/v1/responses",
   "api_key": "your-api-key-here",
-  "model": "gpt-5.2",
+  "model": "your-model-name",
   "max_tokens": 4096,
   "context_window": 128000,
   "skills_paths": ["./skills"],
   "temperature": 0.7
 }
 ```
+
+The `api_base` should point to an OpenAI-compatible Responses API endpoint. You can also set `KOI_API_KEY` as an environment variable instead of putting your key in the config file.
 
 ### Start Chatting
 
@@ -82,12 +85,14 @@ During a `koi run` session:
 | Command | Description |
 |---------|-------------|
 | `/exit`, `/quit` | Exit the session |
+| `/help` | Show help |
 | `/memory` | Show current memory |
 | `/remember TEXT` | Add text to memory |
 | `/skills` | List available skills |
 | `/compact` | Force conversation compaction |
 | `/stats` | Show context usage statistics |
-| `/help` | Show help |
+
+**Input:** Enter submits, Escape+Enter inserts a newline. Multi-line paste is supported.
 
 ## Tools
 
@@ -219,7 +224,7 @@ src/koi/
 ├── __main__.py      # Entry point
 ├── cli.py           # CLI commands (init, run, cron, etc.)
 ├── agent.py         # Main conversation loop
-├── llm.py           # OpenAI-compatible API client with streaming
+├── llm.py           # OpenAI-compatible Responses API client
 ├── tools.py         # Tool definitions and execution
 ├── sandbox.py       # Security sandbox enforcement
 ├── memory.py        # Persistent memory

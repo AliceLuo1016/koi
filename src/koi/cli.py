@@ -61,7 +61,7 @@ def init(force: bool):
     agents_path = agent_dir / "AGENTS.md"
     if not agents_path.exists() or force:
         with open(agents_path, "w") as f:
-            f.write("# Project Instructions\n\nSpecial instructions for this project go here.\n")
+            f.write("# Project Instructions\n\n## Skills\n\nAll skills live in `./skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.\n")
     
     # Create default sandbox config
     sandbox_path = agent_dir / "sandbox.yaml"
