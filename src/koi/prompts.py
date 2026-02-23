@@ -1,10 +1,12 @@
 """System prompt building for koi agent."""
 
+import json
 import os
 import platform
+import re
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import Any, Dict
 
 from .config import Config
 from .memory import Memory
@@ -48,30 +50,30 @@ Important: For scheduling tasks, use the built-in cron tools:
 Cron logs are stored in .agent/cron-logs/ automatically. Do NOT use exec_command for cron management."""
 
     sections = [base_prompt]
-    
+
     # Add tools information
     tools_section = _build_tools_section()
     sections.append(tools_section)
-    
+
     # Add skills information
     skills_section = _build_skills_section(config)
     sections.append(skills_section)
-    
+
     # Add project instructions if available
     project_section = _build_project_section()
     if project_section:
         sections.append(project_section)
-    
+
     # Add memory if available
     memory_section = _build_memory_section()
     if memory_section:
         sections.append(memory_section)
-    
+
     # Add alerts check
     alerts_section = _build_alerts_section()
     if alerts_section:
         sections.append(alerts_section)
-    
+
     # Non-interactive mode: no confirmation needed
     if non_interactive:
         sections.append("""IMPORTANT: You are running in non-interactive (cron) mode. There is no user to respond.
@@ -90,14 +92,14 @@ Cron logs are stored in .agent/cron-logs/ automatically. Do NOT use exec_command
 def _build_tools_section() -> str:
     """Build tools section of system prompt."""
     tools = get_tool_definitions()
-    
+
     tool_list = []
     for tool in tools:
         func = tool["function"]
         name = func["name"]
         description = func["description"]
         tool_list.append(f"- {name}: {description}")
-    
+
     return f"""Available Tools:
 {chr(10).join(tool_list)}
 
@@ -109,10 +111,10 @@ def _build_skills_section(config: Config) -> str:
     try:
         skills_manager = SkillsManager(config.skills_paths)
         skills_summary = skills_manager.get_skills_summary()
-        
+
         if "No skills available" in skills_summary:
             return "Skills: No skills found in configured paths."
-        
+
         return f"""Skills:
 {skills_summary}
 
@@ -120,7 +122,7 @@ IMPORTANT skill rules:
 1. When a user's input matches or relates to an available skill, ALWAYS use read_skill to load it FIRST before responding, then follow its instructions exactly.
 2. To load a skill, use the read_skill tool with the skill name (e.g. read_skill("log-monitor")). Do NOT use read_file to read skill files.
 3. Match generously — e.g. "cluster usage" should trigger the cluster usage skill, "check logs" should trigger a log monitoring skill, etc."""
-    
+
     except Exception:
         return "Skills: Error loading skills."
 
@@ -128,17 +130,17 @@ IMPORTANT skill rules:
 def _build_project_section() -> str:
     """Build project instructions section if AGENTS.md exists."""
     agents_file = Path.cwd() / ".agent" / "AGENTS.md"
-    
+
     if not agents_file.exists():
         return ""
-    
+
     try:
-        with open(agents_file, "r", encoding="utf-8") as f:
+        with open(agents_file, encoding="utf-8") as f:
             content = f.read()
-        
+
         return f"""Project Instructions:
 {content}"""
-    
+
     except Exception:
         return ""
 
@@ -148,20 +150,19 @@ def _build_memory_section() -> str:
     try:
         memory = Memory()
         content = memory.load()
-        
+
         if not content.strip():
             return ""
-        
+
         return f"""Memory:
 {content}"""
-    
+
     except Exception:
         return ""
 
 
 def _build_alerts_section() -> str:
     """Check for pending alerts and add to prompt if any exist."""
-    import re as _re
     alerts_dir = Path.cwd() / ".agent" / "alerts"
     if not alerts_dir.exists():
         return ""
@@ -169,9 +170,9 @@ def _build_alerts_section() -> str:
         pending = []
         for f in sorted(alerts_dir.glob("*.md")):
             text = f.read_text(encoding="utf-8")
-            status_match = _re.search(r'\*\*Status:\*\*\s*(\w+)', text)
+            status_match = re.search(r'\*\*Status:\*\*\s*(\w+)', text)
             if status_match and status_match.group(1) == "pending":
-                title_match = _re.search(r'^#\s+(.+)', text, _re.MULTILINE)
+                title_match = re.search(r'^#\s+(.+)', text, re.MULTILINE)
                 title = title_match.group(1) if title_match else f.stem
                 pending.append(title)
         if not pending:
@@ -188,7 +189,7 @@ def _build_context_section() -> str:
     current_dir = Path.cwd()
     system_info = platform.system()
     python_version = platform.python_version()
-    
+
     return f"""Current Context:
 - Time: {current_time}
 - Working Directory: {current_dir}
@@ -221,7 +222,7 @@ def _format_tool_result(result: Dict[str, Any]) -> str:
     """Format tool result for inclusion in conversation."""
     if not result.get("success", False):
         return f"Error: {result.get('error', 'Unknown error')}"
-    
+
     # Format based on result content
     if "content" in result:
         return result["content"]
@@ -234,5 +235,4 @@ def _format_tool_result(result: Dict[str, Any]) -> str:
         return output
     else:
         # Return JSON representation for complex results
-        import json
         return json.dumps(result, indent=2)

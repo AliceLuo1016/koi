@@ -31,32 +31,43 @@ class CronManager:
         """Add a new cron job."""
         # Generate unique job ID
         job_id = str(uuid.uuid4())[:8]
-        
+
         # Get current working directory
         project_path = Path.cwd().absolute()
-        
+
         # Log filename format: DATE_taskname.log (lowercase, sanitized)
         safe_task_name = re.sub(r'[^\w\-]', '_', task).lower()[:50].strip('_')
         log_filename = f"{datetime.now().strftime('%Y-%m-%d')}_{safe_task_name}.log"
         log_path = self.logs_dir / log_filename
-        
+
         # Find full path to koi binary
         koi_path = shutil.which("koi")
         if not koi_path:
             raise RuntimeError("Could not find 'koi' in PATH. Make sure koi is installed and accessible.")
-        
-        # Escape single quotes in task for shell safety
-        escaped_task = task.replace("'", "'\\''")
-        
+
         # Capture current PATH so cron has access to the same tools (uv, python, etc.)
         current_path = os.environ.get("PATH", "/usr/bin:/bin")
 
-        # Build cron command with full path (use single quotes to avoid nested quote issues)
-        cron_command = (
-            f"{schedule} PATH={current_path} cd {project_path} && "
-            f"{koi_path} run --task '{escaped_task}' --non-interactive "
-            f">> {log_path} 2>&1"
+        # Write a launcher script to avoid crontab line length limits
+        scripts_dir = self.agent_dir / "cron-scripts"
+        scripts_dir.mkdir(exist_ok=True)
+        script_path = scripts_dir / f"{job_id}.sh"
+        script_path.write_text(
+            f"#!/usr/bin/env bash\n"
+            f"export PATH={current_path}\n"
+            f"cd {project_path}\n"
+            f"{koi_path} run --task \"$(cat {scripts_dir / (job_id + '.task')})\" "
+            f"--non-interactive >> {log_path} 2>&1\n",
+            encoding="utf-8",
         )
+        script_path.chmod(0o755)
+
+        # Write the task text to a separate file (avoids all quoting issues)
+        task_path = scripts_dir / f"{job_id}.task"
+        task_path.write_text(task, encoding="utf-8")
+
+        # Cron entry is now short
+        cron_command = f"{schedule} {script_path}"
         
         # Add job to system crontab
         self._add_to_system_crontab(cron_command, job_id)
@@ -81,12 +92,19 @@ class CronManager:
         """Remove a cron job."""
         if job_id not in self._jobs_cache:
             raise ValueError(f"Job {job_id} not found")
-        
+
         job = self._jobs_cache[job_id]
-        
+
         # Remove from system crontab
         self._remove_from_system_crontab(job["command"])
-        
+
+        # Clean up script and task files
+        scripts_dir = self.agent_dir / "cron-scripts"
+        for ext in (".sh", ".task"):
+            f = scripts_dir / f"{job_id}{ext}"
+            if f.exists():
+                f.unlink()
+
         # Remove from local cache
         del self._jobs_cache[job_id]
         self._save_jobs()

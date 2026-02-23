@@ -49,7 +49,7 @@ Edit `.agent/config.json`:
   "model": "your-model-name",
   "max_tokens": 4096,
   "context_window": 128000,
-  "skills_paths": ["./skills"],
+  "skills_paths": [".agent/skills"],
   "temperature": 0.7
 }
 ```
@@ -246,8 +246,9 @@ your-project/
 │   ├── AGENTS.md        # Project instructions
 │   ├── alerts/          # Alert files
 │   ├── crontab.json     # Cron job metadata
+│   ├── skills/          # Skills (bundled + custom)
 │   └── cron-logs/       # Scheduled task logs
-└── skills/              # Project-specific skills (optional)
+└── ...
 ```
 
 ## Development

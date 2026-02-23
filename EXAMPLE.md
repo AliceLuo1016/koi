@@ -6,7 +6,7 @@ Here's a quick example of using the Koi AI agent:
 
 ```bash
 cd ~/koi
-./install.sh
+pip install .
 ```
 
 ## 2. Initialize a project
@@ -28,7 +28,7 @@ Edit `.agent/config.json`:
   "model": "your-model-name",
   "max_tokens": 4096,
   "context_window": 128000,
-  "skills_paths": ["./skills"],
+  "skills_paths": [".agent/skills"],
   "temperature": 0.7
 }
 ```

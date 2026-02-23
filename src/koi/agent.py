@@ -1,10 +1,8 @@
 """Main agent implementation with conversation loop."""
 
-import asyncio
 import json
 import signal
-import sys
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from rich.console import Console
 from rich.text import Text
 from prompt_toolkit import PromptSession
@@ -16,7 +14,7 @@ from .memory import Memory
 from .skills import SkillsManager
 from .sandbox import Sandbox
 from .tools import ToolExecutor, get_tool_definitions
-from .prompts import build_system_prompt, build_tool_call_message, build_tool_result_message
+from .prompts import build_system_prompt, build_tool_result_message
 from .compaction import ContextCompactor
 
 console = Console()
@@ -42,14 +40,14 @@ class Agent:
         if not non_interactive:
             # Set up prompt_toolkit session with custom key bindings
             # multiline=True enables multi-line paste support
-            # Enter submits, Shift+Enter inserts a newline
+            # Enter submits, Alt+Enter inserts a newline
             bindings = KeyBindings()
 
             @bindings.add('enter')
             def _(event):
                 event.current_buffer.validate_and_handle()
 
-            @bindings.add('s-enter')
+            @bindings.add('escape', 'enter')
             def _(event):
                 event.current_buffer.newline()
 
@@ -70,7 +68,7 @@ class Agent:
         signal.signal(signal.SIGINT, self._signal_handler)
         
         console.print("🐠 [bold cyan]Koi Agent[/bold cyan] - Ready to help!", style="bold")
-        console.print("Type '/exit' to quit, '/help' for commands, Shift+Enter for newline\n")
+        console.print("Type '/exit' to quit, '/help' for commands, Option+Enter (Alt+Enter) for newline\n")
         
         try:
             while self.running:

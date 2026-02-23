@@ -1,8 +1,8 @@
 """Tests for llm module — Responses API conversion logic."""
 
-import json
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 
 from koi.config import Config
 from koi.llm import LLMClient
@@ -25,7 +25,10 @@ def test_system_message_becomes_instructions(client):
     messages = [{"role": "system", "content": "You are helpful."}]
     instructions, input_items = client._convert_messages_to_input(messages)
     assert instructions == "You are helpful."
-    assert input_items == []
+    # Also injected as a developer message
+    assert len(input_items) == 1
+    assert input_items[0]["role"] == "developer"
+    assert input_items[0]["content"] == "You are helpful."
 
 
 def test_user_message(client):
@@ -133,12 +136,14 @@ def test_full_conversation_roundtrip(client):
     ]
     instructions, input_items = client._convert_messages_to_input(messages)
     assert instructions == "Be helpful."
-    assert len(input_items) == 5
-    assert input_items[0]["role"] == "user"
-    assert input_items[1]["type"] == "function_call"
-    assert input_items[2]["type"] == "function_call_output"
-    assert input_items[3]["role"] == "assistant"
-    assert input_items[4]["role"] == "user"
+    # developer msg + user + function_call + function_call_output + assistant + user
+    assert len(input_items) == 6
+    assert input_items[0]["role"] == "developer"
+    assert input_items[1]["role"] == "user"
+    assert input_items[2]["type"] == "function_call"
+    assert input_items[3]["type"] == "function_call_output"
+    assert input_items[4]["role"] == "assistant"
+    assert input_items[5]["role"] == "user"
 
 
 # ── _convert_tools ──
@@ -286,7 +291,6 @@ def test_convert_empty_output(client):
 # ── chat() request construction ──
 
 
-@pytest.mark.asyncio
 async def test_chat_builds_correct_payload(client):
     """Verify the payload sent to the API matches Responses API format."""
     messages = [
@@ -332,7 +336,11 @@ async def test_chat_builds_correct_payload(client):
     # Verify payload structure
     assert captured_payload["model"] == "test-model"
     assert captured_payload["instructions"] == "You are helpful."
-    assert captured_payload["input"] == [{"role": "user", "content": "Hi"}]
+    # input includes developer message + user message
+    assert captured_payload["input"] == [
+        {"role": "developer", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
     # Tools should be flattened
     assert captured_payload["tools"][0]["name"] == "read_file"
     assert "function" not in captured_payload["tools"][0]
@@ -343,7 +351,6 @@ async def test_chat_builds_correct_payload(client):
     assert result["choices"][0]["message"]["content"] == "Hi!"
 
 
-@pytest.mark.asyncio
 async def test_chat_url_uses_api_base_directly(client):
     """Verify we POST to api_base, not api_base + /chat/completions."""
     captured_url = None
