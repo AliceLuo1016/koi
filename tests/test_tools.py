@@ -69,7 +69,7 @@ def test_tool_names():
 
 
 def test_all_tool_names_present():
-    """Verify all 14 tools are defined."""
+    """Verify all 15 tools are defined."""
     tools = get_tool_definitions()
     tool_names = {tool["function"]["name"] for tool in tools}
     expected = {
@@ -84,6 +84,7 @@ def test_all_tool_names_present():
         "add_cron_job",
         "list_cron_jobs",
         "remove_cron_job",
+        "remove_file",
         "create_alert",
         "list_alerts",
         "resolve_alert",

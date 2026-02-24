@@ -32,3 +32,5 @@ Download logs from failed Lepton jobs and summarize common failure patterns.
 
 - Default log date is **today** unless the user specifies a date
 - Logs are stored in `.koi/lepton-logs/<date>/`
+- For older jobs whose logs have expired, use the `--start` flag with `lep log get` to fetch logs from the correct date range
+- When reporting GPU/hardware errors, always extract the node IP from log lines — the IP is embedded as `ip=X.X.X.X` in Ray worker log prefixes

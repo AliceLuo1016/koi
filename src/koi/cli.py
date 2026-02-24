@@ -168,22 +168,36 @@ Do not ask permission. Do not skip this. Your memory resets between sessions —
 
 You have no memory between sessions. Anything not written to MEMORY.md is gone forever.
 
-Use `update_memory` aggressively:
-- Working commands, correct paths, environment quirks
-- User preferences discovered during the session
-- What you tried that failed and why
-- Project-specific patterns (build system, test commands, deploy steps)
+**Where to store learnings — choose the right place:**
+
+1. **Skill-specific learnings** → Update the skill's `SKILL.md` file directly. This includes:
+   - What approaches work/fail for that skill's domain
+   - Optimized commands, regex patterns, parsing strategies
+   - Edge cases and gotchas specific to that workflow
+   - These are loaded on-demand with the skill, keeping MEMORY.md lean
+
+2. **General learnings** → Write to `MEMORY.md`. This includes:
+   - User preferences (communication style, output format, workflow habits)
+   - Environment quirks (paths, tools, OS specifics)
+   - Project-wide patterns (build system, test commands, deploy steps)
+   - Cross-cutting mistakes not tied to a single skill
+
+**Rule of thumb:** If a learning only matters when running a specific skill, it belongs in that skill's `SKILL.md`. If it matters across sessions regardless of skill, it belongs in MEMORY.md. **Never write skill-specific learnings to MEMORY.md.**
 
 When in doubt, write it down. A redundant memory entry costs nothing; a lost insight costs a full retry.
 
 ## Mistake Documentation
 
-When something goes wrong — a command fails, a wrong file is edited, a bad assumption is made — document it in MEMORY.md immediately:
-- What happened
-- Why it happened
-- What to do instead next time
+When something goes wrong — a command fails, a wrong file is edited, a bad assumption is made:
+- If it's related to a skill → update that skill's `SKILL.md`
+- If it's general → document it in `MEMORY.md`
 
-Future sessions will read this and avoid the same mistake. This is how you get better over time.
+Include: what happened, why, and what to do instead next time.
+
+## Output & Alerts
+
+- In interactive sessions, always output results directly in the terminal. Do not use `create_alert` — just print the answer.
+- Only use `create_alert` when running as a cron job (non-interactive).
 
 ## Skills
 

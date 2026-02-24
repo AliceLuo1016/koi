@@ -181,6 +181,20 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "remove_file",
+                "description": "Remove a file or directory under .koi/. Only paths within .koi/ are allowed.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Path to the file or directory to remove (must be under .koi/)"}
+                    },
+                    "required": ["path"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "create_alert",
                 "description": "Create a structured alert with severity and proposed fix. Saves to .koi/alerts/ and sends a desktop notification.",
                 "parameters": {
@@ -271,6 +285,8 @@ class ToolExecutor:
                 return await self._list_cron_jobs(**arguments)
             elif function_name == "remove_cron_job":
                 return await self._remove_cron_job(**arguments)
+            elif function_name == "remove_file":
+                return await self._remove_file(**arguments)
             elif function_name == "create_alert":
                 return await self._create_alert(**arguments)
             elif function_name == "list_alerts":
@@ -532,6 +548,34 @@ class ToolExecutor:
             cron_manager = CronManager()
             cron_manager.remove_job(job_id)
             return {"message": f"Cron job {job_id} removed.", "success": True}
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _remove_file(self, path: str) -> Dict[str, Any]:
+        """Remove a file or directory, restricted to .koi/."""
+        try:
+            import shutil
+            target = Path(path)
+            if not target.is_absolute():
+                target = (Path.cwd() / target).resolve()
+            else:
+                target = target.resolve()
+
+            koi_dir = (Path.cwd() / ".koi").resolve()
+            try:
+                target.relative_to(koi_dir)
+            except ValueError:
+                return {"error": f"Access denied: can only remove paths under .koi/", "success": False}
+
+            if not target.exists():
+                return {"error": f"Path not found: {path}", "success": False}
+
+            if target.is_dir():
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+
+            return {"message": f"Removed {path}", "success": True}
         except Exception as e:
             return {"error": str(e), "success": False}
 
