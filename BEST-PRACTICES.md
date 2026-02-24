@@ -22,6 +22,11 @@ cd imaginaire4
 koi init
 ```
 
+### 4. Start chatting
+
+```bash
+koi run
+```
 ---
 
 ## Example Usage
