@@ -31,6 +31,11 @@ koi run
 
 ## Example Usage
 
+### Some cool features
+- **Batch-analyze failed jobs.** Manually checking logs across many failed jobs is tedious, especially when individual logs are lengthy. Ask koi to scan your last N failed jobs and summarize the common failure causes with suggested fixes.
+- **Automated cluster monitoring.** Set up koi cron jobs to watch cluster utilization and auto-submit new jobs when resources are available — even while you're away.
+- **Build custom skills.** Everyone has unique workflows. Walk koi through your commands one at a time so it learns each step, then ask it to package the workflow into a reusable skill via the skill-creator tool. It may need a few iterations to refine. Once done, koi can execute the entire workflow on its own.
+
 ### Cluster Usage
 
 ![Cluster usage demo](docs/images/cluster-usage.png)
