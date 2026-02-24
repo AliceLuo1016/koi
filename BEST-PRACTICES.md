@@ -48,6 +48,40 @@ Set up cron jobs with complicated logic. For example, run black border when ther
 
 ![Cron job demo](docs/images/cron-job.png)
 
+Cron job example execution log:
+```text
+============================================================
+[2026-02-24 12:00:01] Cron task started: Check if black border removal jobs need to be launched:
+1. Run the curation-stats skill to get pipeline stats. Check the "clips_to_remove_black_border" count.
+2. If clips_to_remove_black_border > 2,000,000, proceed. Otherwise, do nothing.
+3. Run the lepton-job-list skill to check current jobs. Look for any jobs with name prefix "black-border-removal" that are in Running or Queueing state.
+4. If there are NO black-border-removal jobs running or queueing, launch new ones by running: uv run bash +x pipelines/video/utils/launch_black_border_removal.sh
+5. If black-border-removal jobs already exist, do nothing.
+Log what happened and why.
+============================================================
+## Summary
+
+**Black border removal jobs launched successfully.** Here's the decision log:
+
+| Step | Check | Result |
+|------|-------|--------|
+| 1. Curation stats | `clips_to_remove_black_border` | **2,043,717** (> 2M threshold ✅) |
+| 2. Threshold check | Proceed? | **YES** |
+| 3. Existing jobs | Running/Queueing black-border-removal jobs? | **NONE** (0 jobs) |
+| 4. Launch | Run `launch_black_border_removal.sh` | **4 jobs created ✅** |
+
+**Jobs launched:**
+
+| Job Name | Job ID | Cluster | Shape | Workers |
+|----------|--------|---------|-------|---------|
+| `black-border-removal-0` | `black-border-removal-0-xfx9` | oci-ord-lepton-001 | my.4xl40s | 8 |
+| `black-border-removal-1` | `black-border-removal-1-wv99` | oci-ord-lepton-001 | my.4xl40s | 8 |
+| `black-border-removal-2` | `black-border-removal-2-6cxz` | oci-ord-lepton-001 | my.4xl40s | 8 |
+| `black-border-removal-3` | `black-border-removal-3-wd49` | oci-ord-lepton-001 | my.4xl40s | 8 |
+
+Total: **32 worker nodes** queued across 4 jobs, each processing up to 1M clips with priority `high-8000`.
+```
+
 ---
 
 ## How to Add a New Skill
