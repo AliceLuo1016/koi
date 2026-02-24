@@ -185,7 +185,13 @@ class Agent:
                         # Show errors and key results to the user
                         if not non_interactive:
                             if not result.get("success", True):
-                                error_msg = result.get("error", "Unknown error")
+                                error_msg = result.get("error", "")
+                                if not error_msg:
+                                    # Fall back to stderr/stdout for commands that failed
+                                    error_msg = (result.get("stderr") or result.get("stdout") or "Unknown error").strip()
+                                # Truncate long errors but show enough to be useful
+                                if len(error_msg) > 300:
+                                    error_msg = error_msg[:300] + "..."
                                 console.print(f"  ❌ {error_msg}", style="red")
                             elif result.get("exit_code", 0) != 0:
                                 console.print(f"  ⚠️ Exit code {result['exit_code']}", style="yellow")

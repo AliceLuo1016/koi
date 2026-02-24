@@ -14,15 +14,15 @@ from koi.tools import ToolExecutor, get_tool_definitions
 def _make_sandbox(tmpdir: str, blocked_patterns=None):
     """Create a Sandbox with a sandbox.yaml allowing tmpdir."""
     td = Path(tmpdir)
-    agent_dir = td / ".agent"
-    agent_dir.mkdir(exist_ok=True)
+    koi_dir = td / ".koi"
+    koi_dir.mkdir(exist_ok=True)
     cfg = {
         "filesystem": {"allowed_paths": [str(td)]},
         "commands": {},
     }
     if blocked_patterns:
         cfg["commands"]["blocked_patterns"] = blocked_patterns
-    (agent_dir / "sandbox.yaml").write_text(yaml.dump(cfg))
+    (koi_dir / "sandbox.yaml").write_text(yaml.dump(cfg))
     return Sandbox(project_root=td)
 
 
@@ -358,10 +358,10 @@ async def test_tool_executor_update_memory():
     """Test update_memory appends to memory."""
     with TemporaryDirectory() as temp_dir:
         sandbox = _make_sandbox(temp_dir)
-        # Create .agent dir for memory
-        agent_dir = Path(temp_dir) / ".agent"
-        agent_dir.mkdir(exist_ok=True)
-        mem_file = agent_dir / "MEMORY.md"
+        # Create .koi dir for memory
+        koi_dir = Path(temp_dir) / ".koi"
+        koi_dir.mkdir(exist_ok=True)
+        mem_file = koi_dir / "MEMORY.md"
         mem_file.write_text("# Memory\n")
 
         executor = ToolExecutor(Mock(), sandbox)
@@ -418,7 +418,7 @@ async def test_tool_executor_create_alert():
         old_cwd = os.getcwd()
         os.chdir(temp_dir)
         try:
-            (Path(temp_dir) / ".agent").mkdir()
+            (Path(temp_dir) / ".koi").mkdir()
             executor = ToolExecutor(Mock())
 
             tool_call = {
@@ -438,7 +438,7 @@ async def test_tool_executor_create_alert():
             result = await executor.execute_tool(tool_call)
             assert result["success"] is True
 
-            alerts_dir = Path(temp_dir) / ".agent" / "alerts"
+            alerts_dir = Path(temp_dir) / ".koi" / "alerts"
             alert_files = list(alerts_dir.glob("*.md"))
             assert len(alert_files) == 1
             content = alert_files[0].read_text()
@@ -456,7 +456,7 @@ async def test_tool_executor_list_alerts():
         old_cwd = os.getcwd()
         os.chdir(temp_dir)
         try:
-            alerts_dir = Path(temp_dir) / ".agent" / "alerts"
+            alerts_dir = Path(temp_dir) / ".koi" / "alerts"
             alerts_dir.mkdir(parents=True)
             (alerts_dir / "alert1.md").write_text(
                 "# Alert One\n- **Status:** pending\n- **Severity:** high\n"
@@ -492,7 +492,7 @@ async def test_tool_executor_resolve_alert():
         old_cwd = os.getcwd()
         os.chdir(temp_dir)
         try:
-            alerts_dir = Path(temp_dir) / ".agent" / "alerts"
+            alerts_dir = Path(temp_dir) / ".koi" / "alerts"
             alerts_dir.mkdir(parents=True)
             alert_file = alerts_dir / "test_alert.md"
             alert_file.write_text(

@@ -31,7 +31,7 @@ cd your-project
 koi init
 ```
 
-This creates a `.agent/` directory with:
+This creates a `.koi/` directory with:
 - `config.json` — API settings and configuration
 - `sandbox.yaml` — Security sandbox rules
 - `MEMORY.md` — Persistent memory file
@@ -40,7 +40,7 @@ This creates a `.agent/` directory with:
 
 ### Configure API Access
 
-Edit `.agent/config.json`:
+Edit `.koi/config.json`:
 
 ```json
 {
@@ -49,7 +49,7 @@ Edit `.agent/config.json`:
   "model": "your-model-name",
   "max_tokens": 4096,
   "context_window": 128000,
-  "skills_paths": [".agent/skills"],
+  "skills_paths": [".koi/skills"],
   "temperature": 0.7
 }
 ```
@@ -68,7 +68,7 @@ koi run
 
 | Command | Description |
 |---------|-------------|
-| `koi init` | Initialize `.agent/` directory |
+| `koi init` | Initialize `.koi/` directory |
 | `koi run` | Start interactive session |
 | `koi run --task "..." --non-interactive` | Run a task and exit (for cron/scripts) |
 | `koi cron add "0 9 * * *" "Check emails"` | Schedule a recurring task |
@@ -112,7 +112,7 @@ During a `koi run` session:
 
 ## Sandbox Security
 
-Koi includes a sandbox that prevents accidental credential leaks and destructive actions. Configuration lives in `.agent/sandbox.yaml` and is loaded automatically on every run.
+Koi includes a sandbox that prevents accidental credential leaks and destructive actions. Configuration lives in `.koi/sandbox.yaml` and is loaded automatically on every run.
 
 ### Three Layers of Protection
 
@@ -163,7 +163,7 @@ Dangerous commands are hard-blocked. Risky commands are flagged for user confirm
 
 ### Customization
 
-Edit `.agent/sandbox.yaml` to adjust rules for your project. The defaults are secure but not overly restrictive.
+Edit `.koi/sandbox.yaml` to adjust rules for your project. The defaults are secure but not overly restrictive.
 
 ## Alerts System
 
@@ -176,7 +176,7 @@ koi> Read the logs and create alerts for any errors
 🔧 create_alert "Auth retry storm" severity=high
 ```
 
-Alerts are saved as markdown files in `.agent/alerts/` and trigger desktop notifications (macOS/Linux). On startup, koi shows a count of pending alerts so nothing gets missed.
+Alerts are saved as markdown files in `.koi/alerts/` and trigger desktop notifications (macOS/Linux). On startup, koi shows a count of pending alerts so nothing gets missed.
 
 ### Alert Workflow
 
@@ -215,7 +215,7 @@ koi cron add "0 * * * *" "Read mock/logs/latest.log and create alerts for errors
 koi cron add "0 9 * * 1-5" "Review yesterday's commits and plan today"
 ```
 
-Cron jobs use the full path to `koi` (resolved via `shutil.which`) so they work correctly in cron's minimal environment. Output goes to `.agent/cron-logs/`.
+Cron jobs use the full path to `koi` (resolved via `shutil.which`) so they work correctly in cron's minimal environment. Output goes to `.koi/cron-logs/`.
 
 ## Architecture
 
@@ -239,7 +239,7 @@ src/koi/
 
 ```
 your-project/
-├── .agent/
+├── .koi/
 │   ├── config.json      # API settings
 │   ├── sandbox.yaml     # Security rules
 │   ├── MEMORY.md        # Persistent memory

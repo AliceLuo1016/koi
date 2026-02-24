@@ -107,6 +107,6 @@ def test_memory_default_path():
     """Test memory with default path."""
     memory = Memory()
     
-    # Should use .agent/MEMORY.md as default
-    expected_path = Path.cwd() / ".agent" / "MEMORY.md"
+    # Should use .koi/MEMORY.md as default
+    expected_path = Path.cwd() / ".koi" / "MEMORY.md"
     assert memory.get_path() == expected_path

@@ -9,9 +9,9 @@ from koi.sandbox import Sandbox
 
 
 def _write_sandbox_yaml(project_root: Path, cfg: dict):
-    agent_dir = project_root / ".agent"
-    agent_dir.mkdir(exist_ok=True)
-    (agent_dir / "sandbox.yaml").write_text(yaml.dump(cfg))
+    koi_dir = project_root / ".koi"
+    koi_dir.mkdir(exist_ok=True)
+    (koi_dir / "sandbox.yaml").write_text(yaml.dump(cfg))
 
 
 def test_sandbox_default_config():
@@ -139,7 +139,7 @@ def test_sandbox_get_safe_env():
 def test_sandbox_get_credentials_env():
     """Credential files are loaded as env vars."""
     with TemporaryDirectory() as td:
-        creds_dir = Path(td) / ".agent" / "credentials"
+        creds_dir = Path(td) / ".koi" / "credentials"
         creds_dir.mkdir(parents=True)
         (creds_dir / "openai.key").write_text("sk-test-123\n")
         (creds_dir / "github.token").write_text("ghp-abc\n")

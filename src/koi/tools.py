@@ -113,7 +113,7 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "update_memory",
-                "description": "Append important information to persistent memory (.agent/MEMORY.md). Use this to remember preferences, decisions, and context across sessions.",
+                "description": "Append important information to persistent memory (.koi/MEMORY.md). Use this to remember preferences, decisions, and context across sessions.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -182,7 +182,7 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "create_alert",
-                "description": "Create a structured alert with severity and proposed fix. Saves to .agent/alerts/ and sends a desktop notification.",
+                "description": "Create a structured alert with severity and proposed fix. Saves to .koi/alerts/ and sends a desktop notification.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -537,7 +537,7 @@ class ToolExecutor:
 
     def _get_alerts_dir(self) -> Path:
         """Get the alerts directory, creating it if needed."""
-        alerts_dir = Path.cwd() / ".agent" / "alerts"
+        alerts_dir = Path.cwd() / ".koi" / "alerts"
         alerts_dir.mkdir(parents=True, exist_ok=True)
         return alerts_dir
 

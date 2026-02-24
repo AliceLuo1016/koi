@@ -16,12 +16,12 @@ class CronManager:
     
     def __init__(self):
         """Initialize cron manager."""
-        self.agent_dir = Path.cwd() / ".agent"
-        self.crontab_file = self.agent_dir / "crontab.json"
-        self.logs_dir = self.agent_dir / "cron-logs"
+        self.koi_dir = Path.cwd() / ".koi"
+        self.crontab_file = self.koi_dir / "crontab.json"
+        self.logs_dir = self.koi_dir / "cron-logs"
         
         # Ensure directories exist
-        self.agent_dir.mkdir(exist_ok=True)
+        self.koi_dir.mkdir(exist_ok=True)
         self.logs_dir.mkdir(exist_ok=True)
         
         # Load existing jobs
@@ -49,7 +49,7 @@ class CronManager:
         current_path = os.environ.get("PATH", "/usr/bin:/bin")
 
         # Write a launcher script to avoid crontab line length limits
-        scripts_dir = self.agent_dir / "cron-scripts"
+        scripts_dir = self.koi_dir / "cron-scripts"
         scripts_dir.mkdir(exist_ok=True)
         script_path = scripts_dir / f"{job_id}.sh"
         script_path.write_text(
@@ -99,7 +99,7 @@ class CronManager:
         self._remove_from_system_crontab(job["command"])
 
         # Clean up script and task files
-        scripts_dir = self.agent_dir / "cron-scripts"
+        scripts_dir = self.koi_dir / "cron-scripts"
         for ext in (".sh", ".task"):
             f = scripts_dir / f"{job_id}{ext}"
             if f.exists():

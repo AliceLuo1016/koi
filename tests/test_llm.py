@@ -14,6 +14,19 @@ def client():
         api_base="https://api.example.com/v1/responses",
         api_key="test-key",
         model="test-model",
+        api_format="responses",
+    )
+    return LLMClient(config)
+
+
+@pytest.fixture
+def cc_client():
+    """Client configured for Chat Completions format."""
+    config = Config(
+        api_base="https://api.example.com/v1/chat/completions",
+        api_key="test-key",
+        model="us/aws/anthropic/bedrock-claude-opus-4-6",
+        api_format="chat_completions",
     )
     return LLMClient(config)
 
@@ -368,3 +381,146 @@ async def test_chat_url_uses_api_base_directly(client):
 
     assert captured_url == "https://api.example.com/v1/responses"
     assert "chat/completions" not in captured_url
+
+
+# ── Chat Completions format tests ──
+
+
+def test_build_cc_payload_basic(cc_client):
+    """Test Chat Completions payload is built correctly."""
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
+    payload = cc_client._build_cc_payload(messages)
+
+    assert payload["model"] == "us/aws/anthropic/bedrock-claude-opus-4-6"
+    assert payload["messages"] == messages
+    assert payload["max_tokens"] == 4096
+    assert "stream" not in payload
+
+
+def test_build_cc_payload_with_tools(cc_client):
+    """Test Chat Completions payload includes tools in CC format."""
+    messages = [{"role": "user", "content": "Hi"}]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+            },
+        }
+    ]
+    payload = cc_client._build_cc_payload(messages, tools=tools)
+
+    # Tools are passed through as-is (already CC format)
+    assert payload["tools"] == tools
+    assert payload["tools"][0]["function"]["name"] == "read_file"
+
+
+def test_build_cc_payload_with_stream(cc_client):
+    """Test Chat Completions payload with streaming enabled."""
+    messages = [{"role": "user", "content": "Hi"}]
+    payload = cc_client._build_cc_payload(messages, stream=True)
+
+    assert payload["stream"] is True
+
+
+def test_convert_cc_response_passthrough(cc_client):
+    """Test Chat Completions response passthrough."""
+    cc_response = {
+        "id": "chatcmpl-1",
+        "choices": [
+            {
+                "message": {
+                    "role": "assistant",
+                    "content": "Hello!",
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+    result = cc_client._convert_cc_response(cc_response)
+    assert result == cc_response
+
+
+async def test_chat_completions_builds_correct_payload(cc_client):
+    """Verify CC path sends Chat Completions format payload."""
+    messages = [
+        {"role": "system", "content": "You are helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+
+    captured_payload = {}
+
+    async def fake_post(url, headers=None, json=None):
+        captured_payload.update(json)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = {
+            "id": "chatcmpl-1",
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": "Hi!"},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        return mock_resp
+
+    cc_client.client.post = fake_post
+
+    result = await cc_client.chat(messages, tools=tools)
+
+    # Verify CC payload structure
+    assert captured_payload["model"] == "us/aws/anthropic/bedrock-claude-opus-4-6"
+    assert captured_payload["messages"] == messages
+    assert captured_payload["max_tokens"] == 4096
+    assert captured_payload["tools"] == tools
+    assert "input" not in captured_payload
+    assert "instructions" not in captured_payload
+
+    # Verify response is passed through
+    assert result["choices"][0]["message"]["content"] == "Hi!"
+
+
+async def test_chat_completions_url(cc_client):
+    """Verify CC path POSTs to the correct URL."""
+    captured_url = None
+
+    async def fake_post(url, **kwargs):
+        nonlocal captured_url
+        captured_url = url
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = {
+            "id": "r",
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": "stop",
+                }
+            ],
+        }
+        return mock_resp
+
+    cc_client.client.post = fake_post
+    await cc_client.chat([{"role": "user", "content": "test"}])
+
+    assert captured_url == "https://api.example.com/v1/chat/completions"

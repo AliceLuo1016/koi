@@ -138,9 +138,47 @@ class LLMClient:
             "choices": [{"message": message, "finish_reason": "stop"}],
         }
 
+    # ── Chat Completions helpers ──
+
+    def _build_cc_payload(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+    ) -> Dict[str, Any]:
+        """Build a Chat Completions API payload (messages passed through)."""
+        payload: Dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "max_tokens": self.config.max_tokens,
+        }
+        if self.config.temperature is not None:
+            payload["temperature"] = self.config.temperature
+        if tools:
+            payload["tools"] = tools  # already in CC format
+        if stream:
+            payload["stream"] = True
+        return payload
+
+    def _convert_cc_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize a Chat Completions response (mostly passthrough)."""
+        # Already in CC format — just ensure the structure we expect
+        return data
+
     # ── API calls ──
 
     async def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+    ) -> Dict[str, Any]:
+        """Send a chat request using the configured API format."""
+        if self.config.api_format == "chat_completions":
+            return await self._chat_completions(messages, tools, stream)
+        return await self._chat_responses(messages, tools, stream)
+
+    async def _chat_responses(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -170,6 +208,30 @@ class LLMClient:
         if stream:
             return await self._stream_chat(url, payload)
 
+        return await self._post_with_retries(url, payload, self._convert_response)
+
+    async def _chat_completions(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+    ) -> Dict[str, Any]:
+        """Send a request to a Chat Completions API endpoint."""
+        payload = self._build_cc_payload(messages, tools, stream)
+        url = self.config.api_base.rstrip("/")
+
+        if stream:
+            return await self._stream_chat_completions(url, payload)
+
+        return await self._post_with_retries(url, payload, self._convert_cc_response)
+
+    async def _post_with_retries(
+        self,
+        url: str,
+        payload: Dict[str, Any],
+        convert_fn,
+    ) -> Dict[str, Any]:
+        """POST with exponential-backoff retries, then convert the response."""
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
@@ -177,7 +239,7 @@ class LLMClient:
                     url, headers=self.headers, json=payload
                 )
                 response.raise_for_status()
-                return self._convert_response(response.json())
+                return convert_fn(response.json())
 
             except httpx.HTTPStatusError as e:
                 last_error = e
@@ -185,7 +247,6 @@ class LLMClient:
                     raise RuntimeError(
                         f"HTTP {e.response.status_code}: {e.response.text}"
                     )
-                # Retryable — wait with exponential backoff
                 delay = 2 ** attempt
                 await asyncio.sleep(delay)
 
@@ -197,7 +258,6 @@ class LLMClient:
             except Exception as e:
                 raise RuntimeError(f"Request failed: {e}")
 
-        # All retries exhausted
         if isinstance(last_error, httpx.HTTPStatusError):
             raise RuntimeError(
                 f"HTTP {last_error.response.status_code} after {self.MAX_RETRIES} retries: {last_error.response.text}"
@@ -283,12 +343,82 @@ class LLMClient:
                 "choices": [{"message": message, "finish_reason": "stop"}]
             }
 
+    async def _stream_chat_completions(
+        self, url: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle Chat Completions streaming and return assembled result."""
+        async with self.client.stream(
+            "POST", url, headers=self.headers, json=payload
+        ) as response:
+            response.raise_for_status()
+
+            full_content = ""
+            tool_calls: Dict[int, Dict[str, Any]] = {}
+
+            async for line in response.aiter_lines():
+                if not line.strip() or not line.startswith("data: "):
+                    continue
+
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                choices = data.get("choices", [])
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {})
+
+                # Text content
+                if "content" in delta and delta["content"]:
+                    full_content += delta["content"]
+
+                # Tool calls
+                for tc_delta in delta.get("tool_calls", []):
+                    idx = tc_delta.get("index", 0)
+                    if idx not in tool_calls:
+                        tool_calls[idx] = {
+                            "id": tc_delta.get("id", ""),
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    if tc_delta.get("id"):
+                        tool_calls[idx]["id"] = tc_delta["id"]
+                    func = tc_delta.get("function", {})
+                    if func.get("name"):
+                        tool_calls[idx]["function"]["name"] = func["name"]
+                    if func.get("arguments"):
+                        tool_calls[idx]["function"]["arguments"] += func["arguments"]
+
+            message: Dict[str, Any] = {"role": "assistant"}
+            if full_content:
+                message["content"] = full_content
+            if tool_calls:
+                message["tool_calls"] = [
+                    tool_calls[i] for i in sorted(tool_calls)
+                ]
+
+            return {
+                "choices": [{"message": message, "finish_reason": "stop"}]
+            }
+
     async def stream_chat(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
         """Yield text content token-by-token for live display."""
+        if self.config.api_format == "chat_completions":
+            async for token in self._stream_chat_completions_tokens(
+                messages, tools
+            ):
+                yield token
+            return
+
         instructions, input_items = self._convert_messages_to_input(messages)
 
         payload: Dict[str, Any] = {
@@ -325,6 +455,46 @@ class LLMClient:
                         data = json.loads(data_str)
                         if data.get("type") == "response.output_text.delta":
                             yield data.get("delta", "")
+                    except json.JSONDecodeError:
+                        continue
+
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"HTTP {e.response.status_code}: {e.response.text}"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Stream request failed: {e}")
+
+    async def _stream_chat_completions_tokens(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Yield text tokens from a Chat Completions streaming response."""
+        payload = self._build_cc_payload(messages, tools, stream=True)
+        url = self.config.api_base.rstrip("/")
+
+        try:
+            async with self.client.stream(
+                "POST", url, headers=self.headers, json=payload
+            ) as response:
+                response.raise_for_status()
+
+                async for line in response.aiter_lines():
+                    if not line.strip() or not line.startswith("data: "):
+                        continue
+
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+
+                    try:
+                        data = json.loads(data_str)
+                        choices = data.get("choices", [])
+                        if choices:
+                            content = choices[0].get("delta", {}).get("content")
+                            if content:
+                                yield content
                     except json.JSONDecodeError:
                         continue
 

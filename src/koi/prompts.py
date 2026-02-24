@@ -47,7 +47,7 @@ Important: For scheduling tasks, use the built-in cron tools:
 - Add: add_cron_job(schedule, task) — task is a natural language instruction koi will interpret each run
 - List: list_cron_jobs()
 - Remove: remove_cron_job(job_id)
-Cron logs are stored in .agent/cron-logs/ automatically. Do NOT use exec_command for cron management."""
+Cron logs are stored in .koi/cron-logs/ automatically. Do NOT use exec_command for cron management."""
 
     sections = [base_prompt]
 
@@ -129,7 +129,7 @@ IMPORTANT skill rules:
 
 def _build_project_section() -> str:
     """Build project instructions section if AGENTS.md exists."""
-    agents_file = Path.cwd() / ".agent" / "AGENTS.md"
+    agents_file = Path.cwd() / ".koi" / "AGENTS.md"
 
     if not agents_file.exists():
         return ""
@@ -163,7 +163,7 @@ def _build_memory_section() -> str:
 
 def _build_alerts_section() -> str:
     """Check for pending alerts and add to prompt if any exist."""
-    alerts_dir = Path.cwd() / ".agent" / "alerts"
+    alerts_dir = Path.cwd() / ".koi" / "alerts"
     if not alerts_dir.exists():
         return ""
     try:
@@ -221,7 +221,10 @@ def build_tool_result_message(tool_call: Dict[str, Any], result: Dict[str, Any])
 def _format_tool_result(result: Dict[str, Any]) -> str:
     """Format tool result for inclusion in conversation."""
     if not result.get("success", False):
-        return f"Error: {result.get('error', 'Unknown error')}"
+        error_msg = result.get("error", "")
+        if not error_msg:
+            error_msg = (result.get("stderr") or result.get("stdout") or "Unknown error").strip()
+        return f"Error: {error_msg}"
 
     # Format based on result content
     if "content" in result:

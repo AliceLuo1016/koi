@@ -16,8 +16,9 @@ def test_config_initialization():
     assert config.model == "openai/openai/gpt-5.2-codex"
     assert config.max_tokens == 4096
     assert config.context_window == 128000
-    assert config.skills_paths == [".agent/skills"]
+    assert config.skills_paths == [".koi/skills"]
     assert config.temperature is None
+    assert config.api_format == "responses"
 
 
 def test_config_custom_values():
@@ -46,6 +47,7 @@ def test_config_save_and_load():
             api_key="test-key",
             model="test-model",
             max_tokens=1024,
+            api_format="chat_completions",
         )
         original_config.save(config_path)
 
@@ -56,6 +58,7 @@ def test_config_save_and_load():
         assert loaded_config.api_key == original_config.api_key
         assert loaded_config.model == original_config.model
         assert loaded_config.max_tokens == original_config.max_tokens
+        assert loaded_config.api_format == "chat_completions"
 
 
 def test_config_load_nonexistent():
@@ -72,8 +75,26 @@ def test_create_default_config():
     assert default_config["model"] == "openai/openai/gpt-5.2-codex"
     assert default_config["max_tokens"] == 4096
     assert default_config["context_window"] == 128000
-    assert default_config["skills_paths"] == [".agent/skills"]
+    assert default_config["skills_paths"] == [".koi/skills"]
+    assert default_config["api_format"] == "responses"
     assert "temperature" not in default_config
+
+
+def test_create_default_config_with_params():
+    """Test creating config with custom parameters."""
+    cfg = create_default_config(
+        model="us/aws/anthropic/bedrock-claude-opus-4-6",
+        api_base="https://inference-api.nvidia.com/v1/chat/completions",
+        api_key="sk-test",
+        api_format="chat_completions",
+        context_window=200000,
+    )
+
+    assert cfg["model"] == "us/aws/anthropic/bedrock-claude-opus-4-6"
+    assert cfg["api_base"] == "https://inference-api.nvidia.com/v1/chat/completions"
+    assert cfg["api_key"] == "sk-test"
+    assert cfg["api_format"] == "chat_completions"
+    assert cfg["context_window"] == 200000
 
 
 def test_config_to_dict():
@@ -87,3 +108,31 @@ def test_config_to_dict():
     assert config_dict["api_base"] == "https://test.com/v1"
     assert config_dict["api_key"] == "test-key"
     assert config_dict["model"] == "test-model"
+    assert config_dict["api_format"] == "responses"
+
+
+def test_api_format_auto_detect_anthropic():
+    """Test that api_format auto-detects chat_completions for anthropic models."""
+    config = Config(model="us/aws/anthropic/bedrock-claude-opus-4-6")
+    assert config.api_format == "chat_completions"
+
+
+def test_api_format_auto_detect_claude():
+    """Test that api_format auto-detects chat_completions for claude models."""
+    config = Config(model="claude-3-opus")
+    assert config.api_format == "chat_completions"
+
+
+def test_api_format_auto_detect_openai():
+    """Test that api_format defaults to responses for non-anthropic models."""
+    config = Config(model="openai/openai/gpt-5.2-codex")
+    assert config.api_format == "responses"
+
+
+def test_api_format_explicit_override():
+    """Test that explicit api_format overrides auto-detection."""
+    config = Config(
+        model="us/aws/anthropic/bedrock-claude-opus-4-6",
+        api_format="responses",
+    )
+    assert config.api_format == "responses"

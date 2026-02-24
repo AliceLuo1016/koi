@@ -10,7 +10,7 @@ class Memory:
     def __init__(self, memory_path: Optional[Path] = None):
         """Initialize memory with path to MEMORY.md file."""
         if memory_path is None:
-            memory_path = Path.cwd() / ".agent" / "MEMORY.md"
+            memory_path = Path.cwd() / ".koi" / "MEMORY.md"
         self.memory_path = memory_path
     
     def load(self) -> str:

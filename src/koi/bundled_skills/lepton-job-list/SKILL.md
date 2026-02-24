@@ -1,41 +1,46 @@
-# Lepton Job List Skill
+---
+name: lepton-job-list
+description: List and summarize Lepton jobs for the current user. Use when the user asks to check their jobs, list running/failed/queued jobs, filter jobs by name or node group, or get resource utilization summaries.
+---
 
-List Lepton jobs for the current user.
+# Lepton Job List
+
+List Lepton jobs for the current user and summarize by state and resource utilization.
 
 ## Workflow
 
-1. Determine username:
-   - `username=$(whoami)`
-2. Run:
-   - `uv run lep job list -u $username`
-   - If you need to **parse the output**, force non-truncated rows first:
-     - `COLUMNS=300 RICH_DISABLE=1 uv run lep job list -u $username`
-   - When the user asks about a **subset** (e.g., filtering, splitting, dedup), use the name filter with the substring:
-     - `COLUMNS=300 RICH_DISABLE=1 uv run lep job list -u $username -n <substring>`
-3. Provide a concise **summary**:
-   - Total jobs (or total matching the substring if filtered)
-   - Counts by state in this order: Running, Queueing, Completed, Failed, Stopped
-   - **Job-name breakdown** (grouped by job name prefix) with counts by state in the same order
-   - Include the resource utilization summary if present (report **nodes occupied**, summing the Workers column)
+1. Determine the username: `username=$(whoami)`
+2. List jobs using one of these variants:
+   - Default (human-readable): `uv run lep job list -u $username`
+   - Non-truncated (for parsing): `COLUMNS=300 RICH_DISABLE=1 uv run lep job list -u $username`
+   - Filter by name substring: `COLUMNS=300 RICH_DISABLE=1 uv run lep job list -u $username -n <substring>`
+   - Filter by node group: `uv run lep job list -u $username -ng <node_group_name>`
+3. Summarize the results (see format below)
 
-## Usage
+### Node Group Nicknames
 
-When asked to check jobs under the user’s name:
+| Nickname | Full Name |
+|----------|-----------|
+| azure | `az-sat-lepton-002` |
+| oci | `oci-ord-lepton-001` |
+| neb-hel | `neb-hel-lepton-001` |
+| neb-cdg | `neb-cdg-lepton-001` |
 
-```
-1. exec_command: username=$(whoami)
-2. exec_command: uv run lep job list -u $username
-3. Summarize totals and counts by state
-```
+## Summary Format
 
-## Example summary format
+Report in this order:
+- Total jobs (or total matching filter)
+- Counts by state: Running, Queueing, Completed, Failed, Stopped
+- Job-name breakdown grouped by job name prefix, with counts per state
+- Resource utilization: nodes occupied per resource type (sum the Workers column)
+
+**Example:**
 
 **By job prefix**
 - splitting-transcoding-general: Running 39, Queueing 33, Completed 110, Failed 68
 - filtering-iter/filtering-audio: Running 19, Queueing 28, Completed 61, Failed 17, Stopped 10
 - black-border-removal: Stopped 21
 - dedup: Completed 2, Failed 4
-- cluster-assignment: Completed 2
 
 **Resource utilization (running/restarting/deleting) — nodes occupied**
 - my.4xl40s: 312

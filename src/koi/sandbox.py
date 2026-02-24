@@ -16,7 +16,7 @@ class Sandbox:
         self._load_config()
 
     def _load_config(self):
-        config_path = self.project_root / ".agent" / "sandbox.yaml"
+        config_path = self.project_root / ".koi" / "sandbox.yaml"
         if config_path.exists():
             with open(config_path) as f:
                 cfg = yaml.safe_load(f) or {}
@@ -32,7 +32,7 @@ class Sandbox:
         self.readonly_paths = [self._resolve(p) for p in fs.get("readonly_paths", [])]
         self.blocked_paths = [self._resolve(p) for p in fs.get("blocked_paths", [])]
         
-        creds = fs.get("credentials_path", ".agent/credentials")
+        creds = fs.get("credentials_path", ".koi/credentials")
         self.credentials_path = self._resolve(creds)
 
         self.env_allowlist = set(env.get("allowlist", ["PATH", "HOME", "USER", "SHELL", "LANG", "TERM"]))
@@ -108,7 +108,7 @@ class Sandbox:
     def get_credential(self, name: str) -> Optional[str]:
         """Read a credential by name from the credentials folder.
         
-        E.g. get_credential("openai") reads .agent/credentials/openai
+        E.g. get_credential("openai") reads .koi/credentials/openai
         Looks for files with or without common extensions (.key, .token, .secret, .txt).
         """
         for suffix in ["", ".key", ".token", ".secret", ".txt"]:
@@ -132,7 +132,7 @@ class Sandbox:
     def get_credentials_env(self) -> Dict[str, str]:
         """Load all credentials as env vars (NAME → value).
         
-        File .agent/credentials/openai.key → env var OPENAI_KEY=<contents>
+        File .koi/credentials/openai.key → env var OPENAI_KEY=<contents>
         """
         env = {}
         if not self.credentials_path.is_dir():

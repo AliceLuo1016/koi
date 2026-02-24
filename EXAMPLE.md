@@ -6,7 +6,7 @@ Here's a quick example of using the Koi AI agent:
 
 ```bash
 cd ~/koi
-pip install .
+pip install -e .
 ```
 
 ## 2. Initialize a project
@@ -19,7 +19,7 @@ koi init
 
 ## 3. Configure API settings
 
-Edit `.agent/config.json`:
+Edit `.koi/config.json`:
 
 ```json
 {
@@ -28,7 +28,7 @@ Edit `.agent/config.json`:
   "model": "your-model-name",
   "max_tokens": 4096,
   "context_window": 128000,
-  "skills_paths": [".agent/skills"],
+  "skills_paths": [".koi/skills"],
   "temperature": 0.7
 }
 ```
@@ -50,7 +50,7 @@ Type '/exit' to quit, '/help' for commands
 koi> What files are in this directory?
 🔧 exec_command...
 The current directory contains:
-- .agent/ (directory containing config, memory, etc.)
+- .koi/ (directory containing config, memory, etc.)
 
 koi> Create a simple Python hello world script
 🔧 write_file...
@@ -76,7 +76,7 @@ koi cron add "0 18 * * *" "Create a summary of today's work and append to weekly
 ## Available commands:
 
 - `koi run` - Interactive session
-- `koi init` - Initialize .agent directory
+- `koi init` - Initialize .koi directory
 - `koi cron add "schedule" "task"` - Schedule tasks
 - `koi cron list` - List scheduled tasks
 - `koi cron remove <id>` - Remove a scheduled task

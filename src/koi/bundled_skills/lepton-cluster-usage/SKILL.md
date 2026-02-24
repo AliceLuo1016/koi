@@ -1,31 +1,23 @@
-# Lepton Cluster Usage Skill
+---
+name: lepton-cluster-usage
+description: Check Lepton cluster node availability by group. Use when the user asks about cluster usage, node availability, or which node groups have free capacity.
+---
 
-Get Lepton cluster usage by listing node groups and summarizing **availability only** in a simple list.
+# Lepton Cluster Usage
+
+List Lepton node groups and summarize availability.
 
 ## Workflow
 
 1. Run: `uv run lep node list`
-2. Parse the table output for each node group:
-   - Name
-   - Available Nodes (all GPU available)
-   - Ready Nodes
-3. Report **only** availability by group in this format:
+2. Parse the table for each node group: Name, Available Nodes (all GPU available), Ready Nodes
+3. Report availability in this format:
 
 ```
 **Availability by group**
-- **<group-name>:** <available>/<ready> available (fully free|fully utilized)
+- **<group-name>:** <available>/<ready> available
 ```
 
-Notes:
-- Include “(fully free)” when available == ready
-- Include “(fully utilized)” when available == 0
-- Otherwise just show “<available>/<ready> available” with no extra notes
-
-## Usage
-
-When asked to check Lepton cluster usage:
-
-```
-1. exec_command: uv run lep node list
-2. Summarize using only the Availability by group list format above
-```
+- Append "(fully free)" when available == ready
+- Append "(fully utilized)" when available == 0
+- No annotation otherwise

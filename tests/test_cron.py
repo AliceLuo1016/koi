@@ -13,11 +13,11 @@ from koi.cron import CronManager
 
 @pytest.fixture
 def cron_env():
-    """Set up a temp dir as cwd with .agent structure for CronManager."""
+    """Set up a temp dir as cwd with .koi structure for CronManager."""
     with TemporaryDirectory() as td:
         old_cwd = os.getcwd()
         os.chdir(td)
-        (Path(td) / ".agent").mkdir()
+        (Path(td) / ".koi").mkdir()
         yield td
         os.chdir(old_cwd)
 
@@ -54,7 +54,7 @@ def test_add_job(mock_which, mock_popen, mock_run, cron_env):
     assert jobs[0]["active"] is True
 
     # Verify script file was created
-    scripts_dir = Path(cron_env) / ".agent" / "cron-scripts"
+    scripts_dir = Path(cron_env) / ".koi" / "cron-scripts"
     assert (scripts_dir / f"{job_id}.sh").exists()
     assert (scripts_dir / f"{job_id}.task").exists()
 
@@ -82,7 +82,7 @@ def test_remove_job(mock_which, mock_popen, mock_run, cron_env):
 
     assert cm.list_jobs() == []
     # Script files should be cleaned up
-    scripts_dir = Path(cron_env) / ".agent" / "cron-scripts"
+    scripts_dir = Path(cron_env) / ".koi" / "cron-scripts"
     assert not (scripts_dir / f"{job_id}.sh").exists()
     assert not (scripts_dir / f"{job_id}.task").exists()
 
@@ -126,7 +126,7 @@ def test_load_jobs_no_file(cron_env):
 
 def test_load_jobs_corrupt(cron_env):
     """Returns empty dict for corrupt JSON."""
-    crontab_file = Path(cron_env) / ".agent" / "crontab.json"
+    crontab_file = Path(cron_env) / ".koi" / "crontab.json"
     crontab_file.write_text("not valid json{{{")
     cm = CronManager()
     assert cm._jobs_cache == {}

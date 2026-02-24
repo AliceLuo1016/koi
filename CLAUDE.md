@@ -42,21 +42,21 @@ Key modules in `src/koi/`:
 - **agent.py** — Main `Agent` class with async conversation loop, prompt_toolkit input, and tool execution cycle
 - **llm.py** — `LLMClient` translates between internal Chat Completions message format and the Responses API wire format; includes retry with exponential backoff
 - **tools.py** — 14 tool definitions (OpenAI function calling format) and `ToolExecutor` dispatch class
-- **sandbox.py** — `Sandbox` class with three security layers: filesystem ACL, env variable allowlist, command pattern blocking/confirmation. Loaded from `.agent/sandbox.yaml`
-- **memory.py** — Persistent memory via `.agent/MEMORY.md`
+- **sandbox.py** — `Sandbox` class with three security layers: filesystem ACL, env variable allowlist, command pattern blocking/confirmation. Loaded from `.koi/sandbox.yaml`
+- **memory.py** — Persistent memory via `.koi/MEMORY.md`
 - **skills.py** — `SkillsManager` discovers `SKILL.md` files from configured paths, loads on demand via `read_skill` tool
-- **config.py** — `Config` class loads `.agent/config.json`, supports `KOI_API_KEY` env var override
+- **config.py** — `Config` class loads `.koi/config.json`, supports `KOI_API_KEY` env var override
 - **compaction.py** — `ContextCompactor` uses tiktoken for token estimation; auto-summarizes at 70% context usage
 - **prompts.py** — Assembles system prompt from base instructions + tools + skills + project instructions + memory + alerts
-- **cron.py** — `CronManager` manages system crontab entries with launcher scripts in `.agent/cron-scripts/`
+- **cron.py** — `CronManager` manages system crontab entries with launcher scripts in `.koi/cron-scripts/`
 
 **Key patterns:**
 - Async throughout (agent loop, tool execution, LLM calls)
 - Internal message format is OpenAI Chat Completions dicts (`role`/`content`/`tool_calls`), converted to Responses API format only at the LLM boundary in `llm.py`
 - Sandbox is consulted before every file read/write (`check_read`/`check_write`) and command execution (`check_command`)
-- Skills are markdown-based `SKILL.md` files loaded on-demand; bundled skills are copied to `.agent/skills/` on `koi init`
+- Skills are markdown-based `SKILL.md` files loaded on-demand; bundled skills are copied to `.koi/skills/` on `koi init`
 
-## Per-Project Structure (.agent/)
+## Per-Project Structure (.koi/)
 
 Created by `koi init` in any project directory:
 - `config.json` — API settings (api_base, api_key, model, max_tokens, context_window, skills_paths, temperature)

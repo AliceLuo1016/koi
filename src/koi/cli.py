@@ -13,6 +13,7 @@ from rich.table import Table
 from .agent import Agent
 from .config import Config, create_default_config
 from .cron import CronManager
+from .llm import LLMClient
 from .memory import Memory
 from .skills import SkillsManager
 
@@ -26,27 +27,84 @@ def main():
     pass
 
 
+MODEL_PRESETS = {
+    "1": {
+        "name": "GPT-5.2 Codex",
+        "model": "openai/openai/gpt-5.2-codex",
+        "api_base": "https://inference-api.nvidia.com/v1/responses",
+        "api_format": "responses",
+        "context_window": 128000,
+    },
+    "2": {
+        "name": "Claude Opus 4.6",
+        "model": "aws/anthropic/bedrock-claude-opus-4-6",
+        "api_base": "https://inference-api.nvidia.com/v1/chat/completions",
+        "api_format": "chat_completions",
+        "context_window": 200000,
+    },
+}
+
+
 @main.command()
 @click.option(
-    "--force", 
-    is_flag=True, 
-    help="Overwrite existing .agent directory"
+    "--force",
+    is_flag=True,
+    help="Overwrite existing .koi directory"
 )
 def init(force: bool):
-    """Initialize .agent directory with config template and empty memory."""
-    agent_dir = Path.cwd() / ".agent"
-    
-    if agent_dir.exists() and not force:
-        console.print("❌ .agent directory already exists. Use --force to overwrite.", style="red")
-        return
-    
-    # Create .agent directory structure
-    agent_dir.mkdir(exist_ok=True)
-    (agent_dir / "cron-logs").mkdir(exist_ok=True)
-    (agent_dir / "credentials").mkdir(exist_ok=True)
+    """Initialize .koi directory with config template and empty memory."""
+    koi_dir = Path.cwd() / ".koi"
 
-    # Copy bundled skills into .agent/skills/
-    skills_dir = agent_dir / "skills"
+    if koi_dir.exists() and not force:
+        console.print("❌ .koi directory already exists. Use --force to overwrite.", style="red")
+        return
+
+    # Interactive setup (fall back to defaults if not a TTY)
+    import sys
+    interactive = sys.stdin.isatty()
+
+    if interactive:
+        console.print("\n🐠 Koi Agent Setup\n", style="bold blue")
+
+        console.print("Select a model:")
+        for key, preset in MODEL_PRESETS.items():
+            console.print(f"  [{key}] {preset['name']} ({preset['model']})")
+
+        choice = click.prompt(
+            ">",
+            type=click.Choice(list(MODEL_PRESETS.keys())),
+            default="1",
+            show_choices=False,
+            show_default=False,
+        )
+        preset = MODEL_PRESETS[choice]
+
+        api_base = preset["api_base"]
+
+        api_key = click.prompt("\nAPI Key")
+        if api_key:
+            masked = api_key[:4] + "*" * (len(api_key) - 4)
+            console.print(f"  Key: {masked}")
+
+        model = preset["model"]
+        api_format = preset["api_format"]
+        context_window = preset["context_window"]
+    else:
+        # Non-interactive defaults (CI)
+        preset = MODEL_PRESETS["1"]
+        model = preset["model"]
+        api_base = preset["api_base"]
+        api_key = ""
+        api_format = preset["api_format"]
+        context_window = preset["context_window"]
+
+    # Create .koi directory structure
+    koi_dir.mkdir(exist_ok=True)
+    (koi_dir / "cron-logs").mkdir(exist_ok=True)
+    (koi_dir / "credentials").mkdir(exist_ok=True)
+
+    # Copy bundled skills into .koi/skills/
+    skills_dir = koi_dir / "skills"
     bundled_skills_dir = Path(__file__).parent / "bundled_skills"
     if bundled_skills_dir.exists():
         if skills_dir.exists() and force:
@@ -62,28 +120,78 @@ def init(force: bool):
             for skill in bundled_skills_dir.iterdir():
                 if skill.is_dir() and not (skills_dir / skill.name).exists():
                     shutil.copytree(skill, skills_dir / skill.name)
-    
-    # Create default config
-    config_path = agent_dir / "config.json"
+
+    # Create config from wizard selections
+    config_path = koi_dir / "config.json"
     if not config_path.exists() or force:
-        default_config = create_default_config()
+        default_config = create_default_config(
+            model=model,
+            api_base=api_base,
+            api_key=api_key,
+            api_format=api_format,
+            context_window=context_window,
+        )
         with open(config_path, "w") as f:
             json.dump(default_config, f, indent=2)
-    
+
     # Create empty memory file
-    memory_path = agent_dir / "MEMORY.md"
+    memory_path = koi_dir / "MEMORY.md"
     if not memory_path.exists() or force:
         with open(memory_path, "w") as f:
             f.write("# Memory\n\nThis is your persistent memory. Write down important things to remember.\n")
-    
+
     # Create empty agents file
-    agents_path = agent_dir / "AGENTS.md"
+    agents_path = koi_dir / "AGENTS.md"
     if not agents_path.exists() or force:
         with open(agents_path, "w") as f:
-            f.write("# Project Instructions\n\n## Skills\n\nAll skills live in `.agent/skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.\n")
-    
+            f.write("""# Project Instructions
+
+You are **Koi** — a terminal-based AI agent that lives in the user's project directory.
+
+## Session Startup
+
+Every session begins the same way — before responding to the user:
+
+1. Read `.koi/MEMORY.md` to recall what you already know about this project.
+2. Check `.koi/alerts/` for any pending alerts.
+3. Then proceed with the user's request.
+
+Do not ask permission. Do not skip this. Your memory resets between sessions — MEMORY.md is the only thing that survives.
+
+## Core Behavior
+
+- Learn from execution history to minimize tool/command invocations and prefer the shortest safe path to achieve the goal.
+- When repeated steps or errors are observed, update the relevant skill(s) or memory to encode the more efficient path (e.g., avoid failing paths, use known working commands, consolidate commands where safe).
+- If a faster workflow becomes the default, apply it directly in future runs without re-trying known failing actions.
+
+## Memory Discipline
+
+You have no memory between sessions. Anything not written to MEMORY.md is gone forever.
+
+Use `update_memory` aggressively:
+- Working commands, correct paths, environment quirks
+- User preferences discovered during the session
+- What you tried that failed and why
+- Project-specific patterns (build system, test commands, deploy steps)
+
+When in doubt, write it down. A redundant memory entry costs nothing; a lost insight costs a full retry.
+
+## Mistake Documentation
+
+When something goes wrong — a command fails, a wrong file is edited, a bad assumption is made — document it in MEMORY.md immediately:
+- What happened
+- Why it happened
+- What to do instead next time
+
+Future sessions will read this and avoid the same mistake. This is how you get better over time.
+
+## Skills
+
+All skills live in `.koi/skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.
+""")
+
     # Create default sandbox config
-    sandbox_path = agent_dir / "sandbox.yaml"
+    sandbox_path = koi_dir / "sandbox.yaml"
     if not sandbox_path.exists() or force:
         with open(sandbox_path, "w") as f:
             f.write("""# Sandbox Security Configuration
@@ -134,9 +242,66 @@ commands:
     - 'rm\\s+'
     - 'git\\s+push\\s+.*--force'
 """)
-    
-    console.print("✅ Initialized .agent directory", style="green")
-    console.print(f"📝 Edit {config_path} to configure your API settings", style="yellow")
+
+    console.print("\n✅ Initialized .koi directory", style="green")
+
+    # Connection test + greeting (interactive only)
+    if interactive:
+        try:
+            console.print("\n🐠 Testing connection...\n", style="blue")
+
+            cfg = Config(
+                api_base=api_base,
+                api_key=api_key,
+                model=model,
+                api_format=api_format,
+                context_window=context_window,
+            )
+
+            async def _get_greeting():
+                llm = LLMClient(cfg)
+                try:
+                    response = await llm.chat([
+                        {
+                            "role": "system",
+                            "content": (
+                                "You are Koi, a friendly terminal AI agent. "
+                                "Keep responses to 1-2 sentences."
+                            ),
+                        },
+                        {
+                            "role": "user",
+                            "content": (
+                                "Say hi and ask the user what "
+                                "you should call them."
+                            ),
+                        },
+                    ])
+                    return response["choices"][0]["message"].get("content", "")
+                finally:
+                    await llm.close()
+
+            greeting = asyncio.run(_get_greeting())
+
+            if greeting:
+                console.print(greeting + "\n")
+
+            name = click.prompt("Your name")
+
+            with open(memory_path, "a") as f:
+                f.write(f"\n## User\n\n- Name: {name}\n")
+
+            console.print(
+                f"\n✅ Nice to meet you, {name}! I'll remember you.",
+                style="green",
+            )
+
+        except Exception:
+            console.print(
+                "\n⚠️  Could not connect to API. "
+                "You can fix settings in .koi/config.json later.",
+                style="yellow",
+            )
 
 
 @main.command()
@@ -163,8 +328,8 @@ def run(task: Optional[str], non_interactive: bool):
             asyncio.run(agent.run_interactive())
     
     except FileNotFoundError as e:
-        if ".agent/config.json" in str(e):
-            console.print("❌ No .agent/config.json found. Run 'koi init' first.", style="red")
+        if ".koi/config.json" in str(e):
+            console.print("❌ No .koi/config.json found. Run 'koi init' first.", style="red")
         else:
             console.print(f"❌ File not found: {e}", style="red")
     except Exception as e:
@@ -287,6 +452,7 @@ def config():
         
         table.add_row("API Base", config.api_base)
         table.add_row("API Key", masked_key)
+        table.add_row("API Format", config.api_format)
         table.add_row("Model", config.model)
         table.add_row("Max Tokens", str(config.max_tokens))
         table.add_row("Context Window", str(config.context_window))
