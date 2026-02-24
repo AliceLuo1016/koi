@@ -238,8 +238,8 @@ class ToolExecutor:
     
     async def execute_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool call and return the result."""
-        function_name = tool_call["function"]["name"]
-        
+        function_name = tool_call["function"]["name"].replace("-", "_")
+
         try:
             arguments = json.loads(tool_call["function"]["arguments"])
         except json.JSONDecodeError as e:

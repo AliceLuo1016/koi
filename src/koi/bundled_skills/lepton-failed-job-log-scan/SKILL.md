@@ -14,8 +14,8 @@ Download logs from failed Lepton jobs and summarize common failure patterns.
 3. Parse for jobs with **State = Failed** and extract the **Job ID** (second line of each Name/ID cell)
 4. Create a log directory for today's date (or a user-specified date):
    ```bash
-   log_dir=/data_local/lepton_logs/<YYYY-MM-DD>
-   mkdir -p $log_dir || { log_dir=./data_local/lepton_logs/<YYYY-MM-DD>; mkdir -p $log_dir; }
+   log_dir=.koi/lepton-logs/<YYYY-MM-DD>
+   mkdir -p $log_dir
    ```
 5. Download each failed job's log: `uv run lep log get -j <job_id> --path $log_dir/<job_id>.log`
 6. Scan all downloaded logs with python3:
@@ -31,4 +31,4 @@ Download logs from failed Lepton jobs and summarize common failure patterns.
 ## Notes
 
 - Default log date is **today** unless the user specifies a date
-- If `/data_local` is not writable, fall back to `./data_local/lepton_logs/<date>` without retrying
+- Logs are stored in `.koi/lepton-logs/<date>/`
