@@ -265,10 +265,3 @@ black src/ tests/
 ruff check src/ tests/
 ```
 
-## License
-
-MIT
-
----
-
-Built with ❤️ for developers who want AI assistance that stays out of the way until you need it.
