@@ -519,3 +519,307 @@ async def test_tool_executor_resolve_alert():
             assert "approved" in alert_file.read_text()
         finally:
             os.chdir(old_cwd)
+
+
+async def test_tool_executor_resolve_alert_not_found():
+    """resolve_alert returns error when alert file doesn't exist."""
+    with TemporaryDirectory() as temp_dir:
+        import os
+
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            (Path(temp_dir) / ".koi" / "alerts").mkdir(parents=True)
+            executor = ToolExecutor(Mock())
+            tool_call = {
+                "function": {
+                    "name": "resolve_alert",
+                    "arguments": json.dumps(
+                        {"alert_file": "missing.md", "resolution": "dismissed"}
+                    ),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is False
+            assert "not found" in result["error"].lower()
+        finally:
+            os.chdir(old_cwd)
+
+
+async def test_tool_executor_resolve_alert_returns_fix_command():
+    """resolve_alert approved with fix_command includes it in result."""
+    with TemporaryDirectory() as temp_dir:
+        import os
+
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            alerts_dir = Path(temp_dir) / ".koi" / "alerts"
+            alerts_dir.mkdir(parents=True)
+            (alerts_dir / "fix_alert.md").write_text(
+                "# DB Full\n- **Status:** pending\n"
+                "- **Fix Command:** `vacuum db`\n"
+            )
+            executor = ToolExecutor(Mock())
+            tool_call = {
+                "function": {
+                    "name": "resolve_alert",
+                    "arguments": json.dumps(
+                        {"alert_file": "fix_alert.md", "resolution": "approved"}
+                    ),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is True
+            assert "fix_command" in result
+            assert result["fix_command"] == "vacuum db"
+        finally:
+            os.chdir(old_cwd)
+
+
+async def test_tool_executor_create_alert_with_fix_command():
+    """create_alert stores fix_command in the alert file."""
+    with TemporaryDirectory() as temp_dir:
+        import os
+
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            (Path(temp_dir) / ".koi").mkdir()
+            executor = ToolExecutor(Mock())
+            tool_call = {
+                "function": {
+                    "name": "create_alert",
+                    "arguments": json.dumps(
+                        {
+                            "title": "Disk Alert",
+                            "summary": "Disk is full",
+                            "severity": "critical",
+                            "proposed_fix": "Delete old logs",
+                            "fix_command": "rm -rf /var/log/old/",
+                        }
+                    ),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is True
+            alerts_dir = Path(temp_dir) / ".koi" / "alerts"
+            content = list(alerts_dir.glob("*.md"))[0].read_text()
+            assert "rm -rf /var/log/old/" in content
+        finally:
+            os.chdir(old_cwd)
+
+
+async def test_tool_executor_list_alerts_approved():
+    """list_alerts filters by approved status."""
+    with TemporaryDirectory() as temp_dir:
+        import os
+
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            alerts_dir = Path(temp_dir) / ".koi" / "alerts"
+            alerts_dir.mkdir(parents=True)
+            (alerts_dir / "a1.md").write_text(
+                "# Alert A\n- **Status:** approved\n- **Severity:** low\n"
+                "- **Detected:** 2025-01-01\n- **Summary:** done\n"
+            )
+            (alerts_dir / "a2.md").write_text(
+                "# Alert B\n- **Status:** pending\n- **Severity:** high\n"
+                "- **Detected:** 2025-01-01\n- **Summary:** todo\n"
+            )
+            executor = ToolExecutor(Mock())
+            tool_call = {
+                "function": {
+                    "name": "list_alerts",
+                    "arguments": json.dumps({"status": "approved"}),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is True
+            assert result["count"] == 1
+            assert result["alerts"][0]["title"] == "Alert A"
+        finally:
+            os.chdir(old_cwd)
+
+
+async def test_tool_executor_exec_command_needs_confirm():
+    """exec_command returns needs_confirmation when command matches confirm pattern."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        # Add a confirm pattern for git push
+        td = Path(temp_dir)
+        koi_dir = td / ".koi"
+        cfg = {
+            "filesystem": {"allowed_paths": [str(td)]},
+            "commands": {"confirm_patterns": [r"git\s+push"]},
+        }
+        (koi_dir / "sandbox.yaml").write_text(yaml.dump(cfg))
+        sandbox = Sandbox(project_root=td)
+        executor = ToolExecutor(Mock(), sandbox)
+
+        tool_call = {
+            "function": {
+                "name": "exec_command",
+                "arguments": json.dumps({"command": "git push origin main"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is False
+        assert result.get("needs_confirmation") is True
+
+
+async def test_tool_executor_exec_command_timeout():
+    """exec_command returns error when command exceeds timeout."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        executor = ToolExecutor(Mock(), sandbox)
+
+        tool_call = {
+            "function": {
+                "name": "exec_command",
+                "arguments": json.dumps({"command": "sleep 60", "timeout": 1}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is False
+        assert "timed out" in result["error"].lower()
+
+
+async def test_tool_executor_remove_file_outside_koi():
+    """remove_file denies paths outside .koi/."""
+    with TemporaryDirectory() as temp_dir:
+        import os
+
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            (Path(temp_dir) / ".koi").mkdir()
+            target = Path(temp_dir) / "sensitive.txt"
+            target.write_text("secret")
+            executor = ToolExecutor(Mock())
+            tool_call = {
+                "function": {
+                    "name": "remove_file",
+                    "arguments": json.dumps({"path": str(target)}),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is False
+            assert "denied" in result["error"].lower()
+            assert target.exists()  # File should NOT be deleted
+        finally:
+            os.chdir(old_cwd)
+
+
+async def test_tool_executor_remove_file_directory():
+    """remove_file removes a directory under .koi/."""
+    with TemporaryDirectory() as temp_dir:
+        import os
+
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            koi_dir = Path(temp_dir) / ".koi"
+            koi_dir.mkdir()
+            target_dir = koi_dir / "old-skill"
+            target_dir.mkdir()
+            (target_dir / "SKILL.md").write_text("content")
+            executor = ToolExecutor(Mock())
+            tool_call = {
+                "function": {
+                    "name": "remove_file",
+                    "arguments": json.dumps({"path": str(target_dir)}),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is True
+            assert not target_dir.exists()
+        finally:
+            os.chdir(old_cwd)
+
+
+async def test_tool_executor_remove_file_not_found():
+    """remove_file returns error when path doesn't exist."""
+    with TemporaryDirectory() as temp_dir:
+        import os
+
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            koi_dir = Path(temp_dir) / ".koi"
+            koi_dir.mkdir()
+            executor = ToolExecutor(Mock())
+            tool_call = {
+                "function": {
+                    "name": "remove_file",
+                    "arguments": json.dumps({"path": str(koi_dir / "nonexistent.txt")}),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is False
+            assert "not found" in result["error"].lower()
+        finally:
+            os.chdir(old_cwd)
+
+
+async def test_tool_executor_web_fetch_html_parsing():
+    """web_fetch parses HTML content, strips scripts, and prepends title."""
+    import unittest.mock as mock
+
+    executor = ToolExecutor(Mock())
+
+    html = """<html>
+<head><title>Test Page</title></head>
+<body>
+<script>var x = 1;</script>
+<p>Hello world content.</p>
+</body></html>"""
+
+    mock_response = mock.MagicMock()
+    mock_response.raise_for_status = lambda: None
+    mock_response.text = html
+
+    mock_client = mock.AsyncMock()
+    mock_client.__aenter__ = mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = mock.AsyncMock(return_value=False)
+    mock_client.get = mock.AsyncMock(return_value=mock_response)
+
+    with mock.patch("koi.tools.httpx.AsyncClient", return_value=mock_client):
+        tool_call = {
+            "function": {
+                "name": "web_fetch",
+                "arguments": json.dumps({"url": "https://example.com"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is True
+    assert "Test Page" in result["content"]
+    assert "Hello world content." in result["content"]
+    assert "var x = 1" not in result["content"]  # Script stripped
+
+
+async def test_tool_executor_web_fetch_http_error():
+    """web_fetch returns error on HTTP failure."""
+    import unittest.mock as mock
+    import httpx
+
+    executor = ToolExecutor(Mock())
+
+    mock_client = mock.AsyncMock()
+    mock_client.__aenter__ = mock.AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = mock.AsyncMock(return_value=False)
+    mock_client.get = mock.AsyncMock(side_effect=Exception("Connection refused"))
+
+    with mock.patch("koi.tools.httpx.AsyncClient", return_value=mock_client):
+        tool_call = {
+            "function": {
+                "name": "web_fetch",
+                "arguments": json.dumps({"url": "https://bad.example.com"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is False
+    assert "Connection refused" in result["error"]

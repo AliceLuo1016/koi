@@ -1,11 +1,53 @@
 """Tests for llm module — Responses API conversion logic."""
 
-from unittest.mock import MagicMock
+import asyncio
+import json as _json
+from unittest.mock import MagicMock, AsyncMock, patch
 
+import httpx
 import pytest
 
 from koi.config import Config
 from koi.llm import LLMClient
+
+
+# ── Streaming helpers ──
+
+
+class _MockStreamResponse:
+    """Simulate an httpx streaming response that yields SSE lines."""
+
+    def __init__(self, lines, status_code=200):
+        self._lines = lines
+        self.status_code = status_code
+        self.headers = {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            mock_req = MagicMock()
+            mock_resp = MagicMock()
+            mock_resp.status_code = self.status_code
+            mock_resp.text = f"HTTP {self.status_code}"
+            raise httpx.HTTPStatusError(
+                f"{self.status_code}", request=mock_req, response=mock_resp
+            )
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+
+class _StreamCtx:
+    """Async context manager wrapping a _MockStreamResponse."""
+
+    def __init__(self, lines, status_code=200):
+        self._resp = _MockStreamResponse(lines, status_code)
+
+    async def __aenter__(self):
+        return self._resp
+
+    async def __aexit__(self, *_):
+        pass
 
 
 @pytest.fixture
@@ -498,6 +540,471 @@ async def test_chat_completions_builds_correct_payload(cc_client):
 
     # Verify response is passed through
     assert result["choices"][0]["message"]["content"] == "Hi!"
+
+
+# ── Temperature in payloads ──
+
+
+async def test_temperature_included_in_responses_payload(client):
+    """When temperature is set, it appears in Responses API payload."""
+    client.config.temperature = 0.5
+    captured = {}
+
+    async def fake_post(url, headers=None, json=None):
+        captured.update(json)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = {"id": "r", "output": []}
+        return mock_resp
+
+    client.client.post = fake_post
+    await client.chat([{"role": "user", "content": "hi"}])
+    assert captured.get("temperature") == 0.5
+
+
+async def test_temperature_omitted_when_none(client):
+    """When temperature is None, key must not appear in payload."""
+    client.config.temperature = None
+    captured = {}
+
+    async def fake_post(url, headers=None, json=None):
+        captured.update(json)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = {"id": "r", "output": []}
+        return mock_resp
+
+    client.client.post = fake_post
+    await client.chat([{"role": "user", "content": "hi"}])
+    assert "temperature" not in captured
+
+
+async def test_temperature_included_in_cc_payload(cc_client):
+    """When temperature is set, it appears in Chat Completions payload."""
+    cc_client.config.temperature = 0.7
+    captured = {}
+
+    async def fake_post(url, headers=None, json=None):
+        captured.update(json)
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = {
+            "id": "r",
+            "choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+        }
+        return mock_resp
+
+    cc_client.client.post = fake_post
+    await cc_client.chat([{"role": "user", "content": "hi"}])
+    assert captured.get("temperature") == 0.7
+
+
+# ── Retry logic ──
+
+
+async def test_retry_non_retryable_status_raises_immediately(client):
+    """Non-retryable HTTP status (e.g. 404) raises RuntimeError without retrying."""
+    call_count = 0
+
+    async def always_404(url, headers=None, json=None):
+        nonlocal call_count
+        call_count += 1
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+        mock_resp.text = "Not found"
+        raise httpx.HTTPStatusError("404", request=MagicMock(), response=mock_resp)
+
+    client.client.post = always_404
+
+    with pytest.raises(RuntimeError, match="HTTP 404"):
+        await client.chat([{"role": "user", "content": "hi"}])
+
+    assert call_count == 1  # No retries
+
+
+async def test_retry_all_exhausted_raises(client):
+    """After MAX_RETRIES retries of a 429, RuntimeError is raised."""
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        async def always_429(url, headers=None, json=None):
+            mock_resp = MagicMock()
+            mock_resp.status_code = 429
+            mock_resp.headers = {}
+            mock_resp.text = "rate limited"
+            raise httpx.HTTPStatusError("429", request=MagicMock(), response=mock_resp)
+
+        client.client.post = always_429
+        with pytest.raises(RuntimeError, match="retries"):
+            await client.chat([{"role": "user", "content": "hi"}])
+
+
+async def test_retry_after_header_parsed(client):
+    """retry-after header value is used as sleep duration."""
+    sleep_delays = []
+
+    async def fake_sleep(delay):
+        sleep_delays.append(delay)
+
+    call_count = 0
+
+    async def retryable_then_ok(url, headers=None, json=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 429
+            mock_resp.headers = {"retry-after": "5"}
+            mock_resp.text = "slow down"
+            raise httpx.HTTPStatusError("429", request=MagicMock(), response=mock_resp)
+        ok = MagicMock()
+        ok.raise_for_status = lambda: None
+        ok.json.return_value = {"id": "r", "output": []}
+        return ok
+
+    client.client.post = retryable_then_ok
+    with patch("asyncio.sleep", side_effect=fake_sleep):
+        await client.chat([{"role": "user", "content": "hi"}])
+
+    assert sleep_delays[0] == 5.0
+
+
+async def test_retry_on_connect_error(client):
+    """ConnectError is retried and succeeds on second attempt."""
+    call_count = 0
+
+    async def connect_error_then_ok(url, headers=None, json=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise httpx.ConnectError("Connection refused")
+        ok = MagicMock()
+        ok.raise_for_status = lambda: None
+        ok.json.return_value = {"id": "r", "output": []}
+        return ok
+
+    client.client.post = connect_error_then_ok
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        result = await client.chat([{"role": "user", "content": "hi"}])
+
+    assert call_count == 2
+    assert "choices" in result
+
+
+# ── Streaming — Responses API ──
+
+
+async def test_stream_chat_assembles_text_deltas(client):
+    """_stream_chat accumulates output_text.delta events into content."""
+    lines = [
+        'data: {"type": "response.output_text.delta", "delta": "Hello"}',
+        'data: {"type": "response.output_text.delta", "delta": " world"}',
+        "data: [DONE]",
+    ]
+    client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await client._stream_chat("https://api.example.com", {})
+    assert result["choices"][0]["message"]["content"] == "Hello world"
+
+
+async def test_stream_chat_assembles_tool_call(client):
+    """_stream_chat collects function_call name and argument deltas."""
+    lines = [
+        'data: {"type": "response.output_item.added", "item": {"type": "function_call", "call_id": "c1", "name": "read_file"}}',
+        'data: {"type": "response.function_call_arguments.delta", "call_id": "c1", "delta": "{\\"path\\": "}',
+        'data: {"type": "response.function_call_arguments.delta", "call_id": "c1", "delta": "\\"x.txt\\"}"}',
+        "data: [DONE]",
+    ]
+    client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await client._stream_chat("https://api.example.com", {})
+    msg = result["choices"][0]["message"]
+    assert "tool_calls" in msg
+    tc = msg["tool_calls"][0]
+    assert tc["function"]["name"] == "read_file"
+    assert "x.txt" in tc["function"]["arguments"]
+
+
+async def test_stream_chat_response_completed_event(client):
+    """response.completed event triggers immediate return via _convert_response."""
+    completed_resp = {
+        "id": "resp_1",
+        "output": [
+            {
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Done!"}],
+            }
+        ],
+    }
+    lines = [
+        f'data: {{"type": "response.completed", "response": {_json.dumps(completed_resp)}}}',
+        "data: [DONE]",
+    ]
+    client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await client._stream_chat("https://api.example.com", {})
+    assert result["choices"][0]["message"]["content"] == "Done!"
+
+
+async def test_stream_chat_ignores_malformed_json(client):
+    """_stream_chat silently skips lines with invalid JSON."""
+    lines = [
+        "data: NOT_JSON",
+        'data: {"type": "response.output_text.delta", "delta": "ok"}',
+        "data: [DONE]",
+    ]
+    client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await client._stream_chat("https://api.example.com", {})
+    assert result["choices"][0]["message"]["content"] == "ok"
+
+
+# ── Streaming — Chat Completions ──
+
+
+async def test_stream_chat_completions_assembles_text(cc_client):
+    """_stream_chat_completions accumulates content deltas."""
+    lines = [
+        'data: {"choices": [{"delta": {"content": "Hi"}}]}',
+        'data: {"choices": [{"delta": {"content": " there"}}]}',
+        "data: [DONE]",
+    ]
+    cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await cc_client._stream_chat_completions("https://api.example.com", {})
+    assert result["choices"][0]["message"]["content"] == "Hi there"
+
+
+async def test_stream_chat_completions_assembles_tool_calls(cc_client):
+    """_stream_chat_completions collects tool call deltas by index."""
+    lines = [
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "read_file", "arguments": ""}}]}}]}',
+        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\\"path\\": \\"a.txt\\"}"}}]}}]}',
+        "data: [DONE]",
+    ]
+    cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await cc_client._stream_chat_completions("https://api.example.com", {})
+    msg = result["choices"][0]["message"]
+    assert "tool_calls" in msg
+    assert msg["tool_calls"][0]["function"]["name"] == "read_file"
+
+
+# ── stream_chat token generator ──
+
+
+async def test_stream_chat_yields_tokens_responses_format(client):
+    """stream_chat() yields text tokens from output_text.delta events."""
+    lines = [
+        'data: {"type": "response.output_text.delta", "delta": "tok1"}',
+        'data: {"type": "response.output_text.delta", "delta": "tok2"}',
+        "data: [DONE]",
+    ]
+    client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    tokens = []
+    async for token in client.stream_chat([{"role": "user", "content": "hi"}]):
+        tokens.append(token)
+    assert tokens == ["tok1", "tok2"]
+
+
+async def test_stream_chat_yields_tokens_cc_format(cc_client):
+    """stream_chat() yields tokens from Chat Completions delta content."""
+    lines = [
+        'data: {"choices": [{"delta": {"content": "A"}}]}',
+        'data: {"choices": [{"delta": {"content": "B"}}]}',
+        "data: [DONE]",
+    ]
+    cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    tokens = []
+    async for token in cc_client.stream_chat([{"role": "user", "content": "hi"}]):
+        tokens.append(token)
+    assert tokens == ["A", "B"]
+
+
+# ── Anthropic Messages API ──
+
+
+@pytest.fixture
+def anthropic_client():
+    config = Config(
+        api_base="https://api.anthropic.com/v1/messages",
+        api_key="test-key",
+        model="claude-opus-4-6",
+        api_format="anthropic",
+    )
+    return LLMClient(config)
+
+
+def test_convert_messages_to_anthropic_system(anthropic_client):
+    """System message is extracted as system_prompt, not appended to messages."""
+    messages = [
+        {"role": "system", "content": "Be helpful."},
+        {"role": "user", "content": "Hi"},
+    ]
+    system, msgs = anthropic_client._convert_messages_to_anthropic(messages)
+    assert system == "Be helpful."
+    assert len(msgs) == 1
+    assert msgs[0]["role"] == "user"
+    assert msgs[0]["content"] == "Hi"
+
+
+def test_convert_messages_to_anthropic_tool_calls(anthropic_client):
+    """Tool calls become tool_use content blocks in assistant message."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "x.py"}',
+                    },
+                }
+            ],
+        }
+    ]
+    _, msgs = anthropic_client._convert_messages_to_anthropic(messages)
+    assert len(msgs) == 1
+    content = msgs[0]["content"]
+    assert content[0]["type"] == "tool_use"
+    assert content[0]["name"] == "read_file"
+    assert content[0]["input"] == {"path": "x.py"}
+
+
+def test_convert_messages_to_anthropic_tool_results(anthropic_client):
+    """Tool results become user message with tool_result content blocks."""
+    messages = [
+        {"role": "tool", "tool_call_id": "call_1", "content": "file contents"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "more contents"},
+    ]
+    _, msgs = anthropic_client._convert_messages_to_anthropic(messages)
+    # Multiple consecutive tool results are grouped into ONE user message
+    assert len(msgs) == 1
+    assert msgs[0]["role"] == "user"
+    results = msgs[0]["content"]
+    assert len(results) == 2
+    assert results[0]["type"] == "tool_result"
+    assert results[0]["tool_use_id"] == "call_1"
+    assert results[1]["tool_use_id"] == "call_2"
+
+
+def test_convert_anthropic_tools(anthropic_client):
+    """OpenAI tool format is converted to Anthropic input_schema format."""
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "Read a file",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                    "required": ["path"],
+                },
+            },
+        }
+    ]
+    converted = anthropic_client._convert_anthropic_tools(tools)
+    assert len(converted) == 1
+    c = converted[0]
+    assert c["name"] == "read_file"
+    assert c["description"] == "Read a file"
+    assert "input_schema" in c
+    assert "function" not in c
+    assert c["input_schema"]["type"] == "object"
+
+
+def test_convert_anthropic_response_text(anthropic_client):
+    """Anthropic text response converts to Chat Completions format."""
+    api_response = {
+        "id": "msg_1",
+        "content": [{"type": "text", "text": "Hello there!"}],
+        "stop_reason": "end_turn",
+    }
+    result = anthropic_client._convert_anthropic_response(api_response)
+    msg = result["choices"][0]["message"]
+    assert msg["role"] == "assistant"
+    assert msg["content"] == "Hello there!"
+    assert "tool_calls" not in msg
+
+
+def test_convert_anthropic_response_tool_use(anthropic_client):
+    """Anthropic tool_use response converts to Chat Completions tool_calls."""
+    api_response = {
+        "id": "msg_2",
+        "content": [
+            {
+                "type": "tool_use",
+                "id": "toolu_1",
+                "name": "read_file",
+                "input": {"path": "x.py"},
+            }
+        ],
+        "stop_reason": "tool_use",
+    }
+    result = anthropic_client._convert_anthropic_response(api_response)
+    msg = result["choices"][0]["message"]
+    assert "tool_calls" in msg
+    tc = msg["tool_calls"][0]
+    assert tc["id"] == "toolu_1"
+    assert tc["function"]["name"] == "read_file"
+    import json as _j
+    assert _j.loads(tc["function"]["arguments"]) == {"path": "x.py"}
+
+
+async def test_chat_routes_to_anthropic(anthropic_client):
+    """chat() uses _chat_anthropic when api_format == 'anthropic'."""
+    captured = {}
+
+    async def fake_post(url, headers=None, json=None):
+        captured.update(json or {})
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = lambda: None
+        mock_resp.json.return_value = {
+            "id": "msg_x",
+            "content": [{"type": "text", "text": "Hi!"}],
+            "stop_reason": "end_turn",
+        }
+        return mock_resp
+
+    anthropic_client.client.post = fake_post
+    result = await anthropic_client.chat(
+        [{"role": "user", "content": "Hello"}]
+    )
+    # Anthropic payload uses "messages" (not "input") and "max_tokens"
+    assert "messages" in captured
+    assert "max_tokens" in captured
+    assert "input" not in captured
+    assert result["choices"][0]["message"]["content"] == "Hi!"
+
+
+async def test_stream_anthropic_assembles_text(anthropic_client):
+    """_stream_anthropic accumulates text_delta events."""
+    lines = [
+        '{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
+        '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}',
+        '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}}',
+        '{"type": "message_stop"}',
+    ]
+    # Anthropic doesn't use "data: " prefix for regular events but our code still filters for it
+    # Actually looking at the code, it does filter for "data: " - let me check the streaming code
+    sse_lines = [f"data: {l}" for l in lines]
+    anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(sse_lines)
+    result = await anthropic_client._stream_anthropic(
+        "https://api.anthropic.com/v1/messages", {}
+    )
+    assert result["choices"][0]["message"]["content"] == "Hello world"
+
+
+async def test_stream_chat_yields_tokens_anthropic_format(anthropic_client):
+    """stream_chat() routes to _stream_anthropic_tokens for anthropic format."""
+    lines = [
+        'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok1"}}',
+        'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok2"}}',
+        "data: [DONE]",
+    ]
+    anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    tokens = []
+    async for token in anthropic_client.stream_chat(
+        [{"role": "user", "content": "hi"}]
+    ):
+        tokens.append(token)
+    assert tokens == ["tok1", "tok2"]
 
 
 async def test_chat_completions_url(cc_client):

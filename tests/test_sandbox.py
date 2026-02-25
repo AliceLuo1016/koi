@@ -187,3 +187,70 @@ def test_sandbox_check_command_confirm():
         assert allowed
         assert confirm
         assert "confirmation" in reason.lower()
+
+
+# ── Credentials ──
+
+
+def test_get_credential_without_extension(tmp_path):
+    """get_credential() finds a file with no extension."""
+    creds = tmp_path / ".koi" / "credentials"
+    creds.mkdir(parents=True)
+    (creds / "mytoken").write_text("secret123\n")
+    _write_sandbox_yaml(tmp_path, {})
+    sandbox = Sandbox(project_root=tmp_path)
+    assert sandbox.get_credential("mytoken") == "secret123"
+
+
+def test_get_credential_with_key_suffix(tmp_path):
+    """get_credential() finds a .key file and returns stripped contents."""
+    creds = tmp_path / ".koi" / "credentials"
+    creds.mkdir(parents=True)
+    (creds / "openai.key").write_text("sk-abc\n  ")
+    _write_sandbox_yaml(tmp_path, {})
+    sandbox = Sandbox(project_root=tmp_path)
+    assert sandbox.get_credential("openai") == "sk-abc"
+
+
+def test_get_credential_not_found(tmp_path):
+    """get_credential() returns None when no matching file exists."""
+    creds = tmp_path / ".koi" / "credentials"
+    creds.mkdir(parents=True)
+    _write_sandbox_yaml(tmp_path, {})
+    sandbox = Sandbox(project_root=tmp_path)
+    assert sandbox.get_credential("nonexistent") is None
+
+
+def test_list_credentials(tmp_path):
+    """list_credentials() returns base names without extensions."""
+    creds = tmp_path / ".koi" / "credentials"
+    creds.mkdir(parents=True)
+    (creds / "openai.key").write_text("k1")
+    (creds / "github.token").write_text("k2")
+    (creds / "raw_cred").write_text("k3")
+    _write_sandbox_yaml(tmp_path, {})
+    sandbox = Sandbox(project_root=tmp_path)
+    names = sandbox.list_credentials()
+    assert "openai" in names
+    assert "github" in names
+    assert "raw_cred" in names
+
+
+def test_get_credentials_env_var_naming(tmp_path):
+    """get_credentials_env() converts hyphens and dots to underscores in var names."""
+    creds = tmp_path / ".koi" / "credentials"
+    creds.mkdir(parents=True)
+    (creds / "my-service.key").write_text("val1")
+    _write_sandbox_yaml(tmp_path, {})
+    sandbox = Sandbox(project_root=tmp_path)
+    env = sandbox.get_credentials_env()
+    # my-service.key → stem=my-service → upper=MY-SERVICE → replace -/_=MY_SERVICE
+    assert "MY_SERVICE" in env
+    assert env["MY_SERVICE"] == "val1"
+
+
+def test_list_credentials_no_dir(tmp_path):
+    """list_credentials() returns [] when credentials dir doesn't exist."""
+    _write_sandbox_yaml(tmp_path, {})
+    sandbox = Sandbox(project_root=tmp_path)
+    assert sandbox.list_credentials() == []

@@ -112,15 +112,15 @@ def test_config_to_dict():
 
 
 def test_api_format_auto_detect_anthropic():
-    """Test that api_format auto-detects chat_completions for anthropic models."""
+    """Test that api_format auto-detects 'anthropic' for anthropic model names."""
     config = Config(model="us/aws/anthropic/bedrock-claude-opus-4-6")
-    assert config.api_format == "chat_completions"
+    assert config.api_format == "anthropic"
 
 
 def test_api_format_auto_detect_claude():
-    """Test that api_format auto-detects chat_completions for claude models."""
+    """Test that api_format auto-detects 'anthropic' for claude model names."""
     config = Config(model="claude-3-opus")
-    assert config.api_format == "chat_completions"
+    assert config.api_format == "anthropic"
 
 
 def test_api_format_auto_detect_openai():
@@ -136,3 +136,46 @@ def test_api_format_explicit_override():
         api_format="responses",
     )
     assert config.api_format == "responses"
+
+
+def test_temperature_included_in_to_dict():
+    """temperature appears in to_dict() only when set."""
+    config_with_temp = Config(temperature=0.7)
+    d = config_with_temp.to_dict()
+    assert d["temperature"] == 0.7
+
+    config_no_temp = Config()
+    d2 = config_no_temp.to_dict()
+    assert "temperature" not in d2
+
+
+def test_temperature_included_in_save():
+    """temperature is written to JSON only when set."""
+    import json
+
+    with TemporaryDirectory() as tmp:
+        path = Path(tmp) / "config.json"
+
+        Config(temperature=0.3).save(path)
+        data = json.loads(path.read_text())
+        assert data["temperature"] == 0.3
+
+        path.unlink()
+        Config().save(path)
+        data2 = json.loads(path.read_text())
+        assert "temperature" not in data2
+
+
+def test_load_uses_default_path(monkeypatch, tmp_path):
+    """Config.load() with no argument reads from cwd/.koi/config.json."""
+    import json
+
+    koi_dir = tmp_path / ".koi"
+    koi_dir.mkdir()
+    cfg_file = koi_dir / "config.json"
+    cfg_file.write_text(
+        json.dumps({"api_base": "https://x.com", "api_key": "", "model": "m"})
+    )
+    monkeypatch.chdir(tmp_path)
+    config = Config.load()
+    assert config.api_base == "https://x.com"

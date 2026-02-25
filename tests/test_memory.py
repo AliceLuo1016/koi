@@ -106,7 +106,34 @@ def test_memory_append_formatting():
 def test_memory_default_path():
     """Test memory with default path."""
     memory = Memory()
-    
+
     # Should use .koi/MEMORY.md as default
     expected_path = Path.cwd() / ".koi" / "MEMORY.md"
     assert memory.get_path() == expected_path
+
+
+def test_memory_load_raises_on_read_error(tmp_path):
+    """load() raises RuntimeError when file exists but can't be read."""
+    memory_path = tmp_path / "MEMORY.md"
+    memory_path.write_text("content")
+    memory_path.chmod(0o000)  # Remove read permission
+    memory = Memory(memory_path)
+    try:
+        with pytest.raises(RuntimeError, match="Failed to load memory"):
+            memory.load()
+    finally:
+        memory_path.chmod(0o644)  # Restore so cleanup works
+
+
+def test_memory_save_raises_on_write_error(tmp_path):
+    """save() raises RuntimeError when directory is not writable."""
+    memory_path = tmp_path / "unwritable" / "MEMORY.md"
+    unwritable = tmp_path / "unwritable"
+    unwritable.mkdir()
+    unwritable.chmod(0o444)  # Read-only directory
+    memory = Memory(memory_path)
+    try:
+        with pytest.raises(RuntimeError, match="Failed to save memory"):
+            memory.save("content")
+    finally:
+        unwritable.chmod(0o755)  # Restore so cleanup works

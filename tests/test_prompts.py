@@ -1,7 +1,14 @@
 """Tests for prompts module."""
 
+import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
 from koi.config import Config
 from koi.prompts import (
+    _build_alerts_section,
+    _build_memory_section,
+    _build_project_section,
     _format_tool_result,
     build_system_prompt,
     build_tool_call_message,
@@ -89,3 +96,100 @@ def test_build_system_prompt_contains_sections():
     assert "Working Directory:" in prompt
     assert "read_file" in prompt
     assert "exec_command" in prompt
+
+
+def test_build_system_prompt_non_interactive():
+    """Non-interactive mode appends cron note to prompt."""
+    config = Config()
+    prompt = build_system_prompt(config, non_interactive=True)
+    assert "non-interactive" in prompt.lower() or "cron" in prompt.lower()
+
+
+def test_build_project_section_with_agents_md():
+    """_build_project_section returns content when AGENTS.md exists."""
+    with TemporaryDirectory() as td:
+        old_cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            koi_dir = Path(td) / ".koi"
+            koi_dir.mkdir()
+            (koi_dir / "AGENTS.md").write_text("# Project Rules\nAlways test.")
+            section = _build_project_section()
+            assert "Project Instructions:" in section
+            assert "Always test." in section
+        finally:
+            os.chdir(old_cwd)
+
+
+def test_build_project_section_no_agents_md():
+    """_build_project_section returns empty string when AGENTS.md is absent."""
+    with TemporaryDirectory() as td:
+        old_cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            (Path(td) / ".koi").mkdir()
+            assert _build_project_section() == ""
+        finally:
+            os.chdir(old_cwd)
+
+
+def test_build_memory_section_with_content():
+    """_build_memory_section returns content when MEMORY.md has text."""
+    with TemporaryDirectory() as td:
+        old_cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            koi_dir = Path(td) / ".koi"
+            koi_dir.mkdir()
+            (koi_dir / "MEMORY.md").write_text("Remember: use Python 3.9.")
+            section = _build_memory_section()
+            assert "Memory:" in section
+            assert "Remember: use Python 3.9." in section
+        finally:
+            os.chdir(old_cwd)
+
+
+def test_build_memory_section_empty():
+    """_build_memory_section returns empty string when memory is blank."""
+    with TemporaryDirectory() as td:
+        old_cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            (Path(td) / ".koi").mkdir()
+            assert _build_memory_section() == ""
+        finally:
+            os.chdir(old_cwd)
+
+
+def test_build_alerts_section_with_pending():
+    """_build_alerts_section reports pending alert count and titles."""
+    with TemporaryDirectory() as td:
+        old_cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            alerts_dir = Path(td) / ".koi" / "alerts"
+            alerts_dir.mkdir(parents=True)
+            (alerts_dir / "alert1.md").write_text(
+                "# Disk Full\n- **Status:** pending\n"
+            )
+            (alerts_dir / "alert2.md").write_text(
+                "# CPU High\n- **Status:** dismissed\n"
+            )
+            section = _build_alerts_section()
+            assert "pending" in section.lower() or "alert" in section.lower()
+            assert "Disk Full" in section
+            assert "CPU High" not in section  # dismissed, not shown
+        finally:
+            os.chdir(old_cwd)
+
+
+def test_build_alerts_section_no_dir():
+    """_build_alerts_section returns empty string when alerts dir missing."""
+    with TemporaryDirectory() as td:
+        old_cwd = os.getcwd()
+        os.chdir(td)
+        try:
+            (Path(td) / ".koi").mkdir()
+            assert _build_alerts_section() == ""
+        finally:
+            os.chdir(old_cwd)

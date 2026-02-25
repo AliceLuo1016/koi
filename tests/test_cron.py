@@ -140,3 +140,59 @@ def test_save_jobs(cron_env):
 
     data = json.loads(cm.crontab_file.read_text())
     assert data["test-id"]["task"] == "hello"
+
+
+@patch("koi.cron.subprocess.run")
+def test_clean_orphaned_jobs_marks_active(mock_run, cron_env):
+    """Jobs found in system crontab are marked active."""
+    cm = CronManager()
+    cm._jobs_cache = {
+        "abc12345": {
+            "id": "abc12345",
+            "schedule": "0 * * * *",
+            "task": "check",
+            "command": "0 * * * * /some/script.sh",
+            "active": False,
+        }
+    }
+    mock_run.return_value = MagicMock(
+        returncode=0, stdout="0 * * * * /some/script.sh # koi-abc12345\n"
+    )
+    cm.clean_orphaned_jobs()
+    assert cm._jobs_cache["abc12345"]["active"] is True
+
+
+@patch("koi.cron.subprocess.run")
+def test_clean_orphaned_jobs_marks_inactive(mock_run, cron_env):
+    """Jobs missing from system crontab are marked inactive."""
+    cm = CronManager()
+    cm._jobs_cache = {
+        "abc12345": {
+            "id": "abc12345",
+            "command": "0 * * * * /some/script.sh",
+            "active": True,
+        }
+    }
+    # Crontab exists but doesn't contain our job
+    mock_run.return_value = MagicMock(returncode=0, stdout="# empty crontab\n")
+    cm.clean_orphaned_jobs()
+    assert cm._jobs_cache["abc12345"]["active"] is False
+
+
+@patch("koi.cron.subprocess.run")
+def test_clean_orphaned_jobs_no_crontab(mock_run, cron_env):
+    """When no crontab exists, all jobs are marked inactive."""
+    cm = CronManager()
+    cm._jobs_cache = {
+        "job1": {"id": "job1", "command": "0 * * * * /s.sh", "active": True}
+    }
+    mock_run.return_value = MagicMock(returncode=1, stdout="")
+    cm.clean_orphaned_jobs()
+    assert cm._jobs_cache["job1"]["active"] is False
+
+
+def test_get_logs_dir(cron_env):
+    """get_logs_dir() returns the logs directory path."""
+    cm = CronManager()
+    assert cm.get_logs_dir() == cm.logs_dir
+    assert cm.get_logs_dir().exists()
