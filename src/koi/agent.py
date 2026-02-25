@@ -269,10 +269,10 @@ class Agent:
         try:
             response = await self.llm_client.chat(messages, tools=tools, stream=False)
 
-            # If it's a text response, print it nicely
+            # Print any text content (including thinking before tool calls)
             if response.get("choices"):
                 msg = response["choices"][0]["message"]
-                if msg.get("content") and not msg.get("tool_calls"):
+                if msg.get("content"):
                     console.print(Text(msg["content"]))
 
             return response
