@@ -104,13 +104,16 @@ class Agent:
                 self._current_task = asyncio.create_task(self._agent_loop())
                 try:
                     await self._current_task
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, KeyboardInterrupt):
                     # Roll back partial messages from the interrupted iteration only;
                     # completed iterations are preserved.
                     snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
                     self.messages = self.messages[:snapshot]
                     console.print("[dim]Operation cancelled.[/dim]")
                 finally:
+                    # Ensure the background task is cleaned up
+                    if self._current_task and not self._current_task.done():
+                        self._current_task.cancel()
                     self._current_task = None
 
         finally:
@@ -141,12 +144,14 @@ class Agent:
             )
             try:
                 await self._current_task
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, KeyboardInterrupt):
                 snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
                 self.messages = self.messages[:snapshot]
                 if not non_interactive:
                     console.print("[dim]Operation cancelled.[/dim]")
             finally:
+                if self._current_task and not self._current_task.done():
+                    self._current_task.cancel()
                 self._current_task = None
 
         finally:
@@ -351,12 +356,10 @@ Just type your requests normally and I'll help you with tasks using available to
     def _handle_sigint(self, signum, frame):
         """Handle SIGINT (Ctrl+C).
 
-        If an agent task is running, cancel it for immediate interruption.
-        Otherwise, raise KeyboardInterrupt so prompt_toolkit's handler
-        (the except KeyboardInterrupt at the prompt) can process it.
+        Always raises KeyboardInterrupt for immediate stack unwinding.
+        If an agent task is running, also cancel it so the background
+        coroutine cleans up (subprocess termination, etc.).
         """
         if self._current_task and not self._current_task.done():
             self._current_task.cancel()
-            console.print("\n[yellow]Interrupted.[/yellow]")
-        else:
-            raise KeyboardInterrupt
+        raise KeyboardInterrupt
