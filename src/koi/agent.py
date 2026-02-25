@@ -225,7 +225,10 @@ class Agent:
                                 error_msg = result.get("error", "")
                                 if not error_msg:
                                     # Fall back to stderr/stdout for commands that failed
-                                    error_msg = (result.get("stderr") or result.get("stdout") or "Unknown error").strip()
+                                    error_msg = (result.get("stderr") or result.get("stdout") or "").strip()
+                                    if not error_msg:
+                                        # Provide more context when no error details are available
+                                        error_msg = f"{func_name} failed without providing details"
                                 # Truncate long errors but show enough to be useful
                                 if len(error_msg) > 300:
                                     error_msg = error_msg[:300] + "..."
@@ -234,6 +237,25 @@ class Agent:
                                 console.print(f"  ⚠️ Exit code {result['exit_code']}", style="yellow")
                                 if result.get("stderr"):
                                     console.print(f"  {result['stderr'][:200]}", style="dim red")
+                            else:
+                                # Show success feedback for certain tools
+                                if func_name == "edit_file" and result.get("message"):
+                                    # Show the edit details
+                                    msg_lines = result["message"].splitlines()
+                                    if len(msg_lines) > 1:
+                                        console.print(f"  ✓ {msg_lines[0]}", style="green")
+                                        for line in msg_lines[1:]:
+                                            if line.startswith("-"):
+                                                console.print(f"    {line}", style="red")
+                                            elif line.startswith("+"):
+                                                console.print(f"    {line}", style="green")
+                                            else:
+                                                console.print(f"    {line}", style="dim")
+                                    else:
+                                        console.print(f"  ✓ {result['message']}", style="green")
+                                elif func_name in ["write_file", "create_alert", "update_memory"] and result.get("message"):
+                                    # Show success for other important operations
+                                    console.print(f"  ✓ {result['message']}", style="green")
                         
                         # Add tool result message
                         tool_result_msg = build_tool_result_message(tool_call, result)

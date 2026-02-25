@@ -386,14 +386,33 @@ class ToolExecutor:
             if old_text not in content:
                 return {"error": f"Text not found in file: {old_text[:100]}...", "success": False}
             
+            # Find the line number where the change occurs
+            lines = content.splitlines(keepends=True)
+            line_num = None
+            for i, line in enumerate(lines):
+                if old_text in line:
+                    line_num = i + 1  # 1-indexed
+                    break
+            
             # Replace first occurrence
             new_content = content.replace(old_text, new_text, 1)
             
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
             
+            # Create a visual diff-like output
+            diff_lines = []
+            if line_num and len(old_text) < 200 and len(new_text) < 200:
+                diff_lines.append(f"Line {line_num}:")
+                diff_lines.append(f"- {old_text}")
+                diff_lines.append(f"+ {new_text}")
+                diff_msg = "\n".join(diff_lines)
+            else:
+                # For longer text, show a summary
+                diff_msg = f"Replaced {len(old_text)} characters with {len(new_text)} characters"
+            
             return {
-                "message": f"Successfully edited {path}",
+                "message": f"Successfully edited {path}\n{diff_msg}",
                 "success": True
             }
         
