@@ -3,7 +3,23 @@
 import json
 import os
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+
+def load_claude_code_api_key() -> Optional[str]:
+    """Load the Anthropic API key from Claude Code's config (~/.claude.json)."""
+    claude_json = Path.home() / ".claude.json"
+    if not claude_json.exists():
+        return None
+    try:
+        with open(claude_json, "r") as f:
+            data = json.load(f)
+        key = data.get("primaryApiKey", "")
+        if key and key.startswith("sk-ant-"):
+            return key
+    except (json.JSONDecodeError, OSError):
+        pass
+    return None
 
 
 class Config:
@@ -21,7 +37,6 @@ class Config:
         api_format: str = None,
     ):
         self.api_base = api_base
-        self.api_key = api_key or os.getenv("KOI_API_KEY", "")
         self.model = model
         self.max_tokens = max_tokens
         self.context_window = context_window
@@ -31,9 +46,19 @@ class Config:
         if api_format is not None:
             self.api_format = api_format
         elif "anthropic" in model or "claude" in model:
-            self.api_format = "chat_completions"
+            self.api_format = "anthropic"
         else:
             self.api_format = "responses"
+
+        # Resolve API key: explicit > env var > Claude Code config (for anthropic)
+        if api_key:
+            self.api_key = api_key
+        elif os.getenv("KOI_API_KEY", ""):
+            self.api_key = os.getenv("KOI_API_KEY", "")
+        elif self.api_format == "anthropic":
+            self.api_key = load_claude_code_api_key() or ""
+        else:
+            self.api_key = ""
     
     @classmethod
     def load(cls, config_path: Path = None) -> "Config":

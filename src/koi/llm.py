@@ -22,10 +22,17 @@ class LLMClient:
     def __init__(self, config: Config):
         self.config = config
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
-        self.headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {config.api_key}",
-        }
+        if config.api_format == "anthropic":
+            self.headers = {
+                "Content-Type": "application/json",
+                "x-api-key": config.api_key,
+                "anthropic-version": "2023-06-01",
+            }
+        else:
+            self.headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {config.api_key}",
+            }
 
     # ── Format conversion helpers ──
 
@@ -166,6 +173,126 @@ class LLMClient:
         # Already in CC format — just ensure the structure we expect
         return data
 
+    # ── Anthropic Messages API helpers ──
+
+    def _convert_messages_to_anthropic(
+        self, messages: List[Dict[str, Any]]
+    ) -> tuple:
+        """Convert Chat Completions messages → (system, anthropic_messages).
+
+        Returns (system_prompt, messages) in Anthropic Messages API format.
+        Handles role alternation and tool result grouping.
+        """
+        system_prompt = None
+        anthropic_msgs: List[Dict[str, Any]] = []
+
+        i = 0
+        while i < len(messages):
+            msg = messages[i]
+            role = msg.get("role")
+
+            if role == "system":
+                system_prompt = msg.get("content", "")
+
+            elif role == "user":
+                anthropic_msgs.append({
+                    "role": "user",
+                    "content": msg.get("content", ""),
+                })
+
+            elif role == "assistant":
+                content_blocks: List[Dict[str, Any]] = []
+                text = msg.get("content")
+                if text:
+                    content_blocks.append({"type": "text", "text": text})
+
+                for tc in msg.get("tool_calls", []):
+                    arguments = tc["function"]["arguments"]
+                    if isinstance(arguments, str):
+                        try:
+                            arguments = json.loads(arguments)
+                        except (json.JSONDecodeError, TypeError):
+                            arguments = {}
+                    content_blocks.append({
+                        "type": "tool_use",
+                        "id": tc["id"],
+                        "name": tc["function"]["name"],
+                        "input": arguments,
+                    })
+
+                if content_blocks:
+                    anthropic_msgs.append({
+                        "role": "assistant",
+                        "content": content_blocks,
+                    })
+
+            elif role == "tool":
+                tool_results: List[Dict[str, Any]] = []
+                while i < len(messages) and messages[i].get("role") == "tool":
+                    tool_msg = messages[i]
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": tool_msg.get("tool_call_id", ""),
+                        "content": tool_msg.get("content", ""),
+                    })
+                    i += 1
+                anthropic_msgs.append({
+                    "role": "user",
+                    "content": tool_results,
+                })
+                continue  # skip the i += 1 at end
+
+            i += 1
+
+        return system_prompt, anthropic_msgs
+
+    def _convert_anthropic_tools(
+        self, tools: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Convert OpenAI tool defs → Anthropic tool format."""
+        converted = []
+        for tool in tools:
+            if tool.get("type") == "function" and "function" in tool:
+                func = tool["function"]
+                converted.append({
+                    "name": func["name"],
+                    "description": func.get("description", ""),
+                    "input_schema": func.get("parameters", {"type": "object"}),
+                })
+            else:
+                converted.append(tool)
+        return converted
+
+    def _convert_anthropic_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Convert Anthropic Messages response → Chat Completions format."""
+        content_parts: List[str] = []
+        tool_calls: List[Dict[str, Any]] = []
+
+        for block in data.get("content", []):
+            block_type = block.get("type")
+            if block_type == "text":
+                content_parts.append(block.get("text", ""))
+            elif block_type == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {})),
+                    },
+                })
+
+        message: Dict[str, Any] = {"role": "assistant"}
+        if content_parts:
+            message["content"] = "".join(content_parts)
+        if tool_calls:
+            message["tool_calls"] = tool_calls
+
+        return {
+            "id": data.get("id", ""),
+            "choices": [{"message": message, "finish_reason": data.get("stop_reason", "stop")}],
+        }
+
     # ── API calls ──
 
     async def chat(
@@ -175,6 +302,8 @@ class LLMClient:
         stream: bool = False,
     ) -> Dict[str, Any]:
         """Send a chat request using the configured API format."""
+        if self.config.api_format == "anthropic":
+            return await self._chat_anthropic(messages, tools, stream)
         if self.config.api_format == "chat_completions":
             return await self._chat_completions(messages, tools, stream)
         return await self._chat_responses(messages, tools, stream)
@@ -210,6 +339,37 @@ class LLMClient:
             return await self._stream_chat(url, payload)
 
         return await self._post_with_retries(url, payload, self._convert_response)
+
+    async def _chat_anthropic(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        stream: bool = False,
+    ) -> Dict[str, Any]:
+        """Send a request to the Anthropic Messages API."""
+        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(messages)
+
+        payload: Dict[str, Any] = {
+            "model": self.config.model,
+            "messages": anthropic_msgs,
+            "max_tokens": self.config.max_tokens,
+        }
+
+        if system_prompt:
+            payload["system"] = system_prompt
+        if self.config.temperature is not None:
+            payload["temperature"] = self.config.temperature
+        if tools:
+            payload["tools"] = self._convert_anthropic_tools(tools)
+        if stream:
+            payload["stream"] = True
+
+        url = self.config.api_base.rstrip("/")
+
+        if stream:
+            return await self._stream_anthropic(url, payload)
+
+        return await self._post_with_retries(url, payload, self._convert_anthropic_response)
 
     async def _chat_completions(
         self,
@@ -417,12 +577,87 @@ class LLMClient:
                 "choices": [{"message": message, "finish_reason": "stop"}]
             }
 
+    async def _stream_anthropic(
+        self, url: str, payload: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Handle Anthropic streaming and return assembled result."""
+        async with self.client.stream(
+            "POST", url, headers=self.headers, json=payload
+        ) as response:
+            response.raise_for_status()
+
+            full_content = ""
+            tool_calls: Dict[int, Dict[str, Any]] = {}
+            current_block_idx = -1
+            current_block_type = None
+
+            async for line in response.aiter_lines():
+                if not line.strip() or not line.startswith("data: "):
+                    continue
+
+                data_str = line[6:]
+                if data_str.strip() == "[DONE]":
+                    break
+
+                try:
+                    data = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+
+                event_type = data.get("type", "")
+
+                if event_type == "content_block_start":
+                    current_block_idx = data.get("index", 0)
+                    block = data.get("content_block", {})
+                    current_block_type = block.get("type")
+                    if current_block_type == "tool_use":
+                        tool_calls[current_block_idx] = {
+                            "id": block.get("id", ""),
+                            "type": "function",
+                            "function": {
+                                "name": block.get("name", ""),
+                                "arguments": "",
+                            },
+                        }
+
+                elif event_type == "content_block_delta":
+                    delta = data.get("delta", {})
+                    delta_type = delta.get("type")
+                    if delta_type == "text_delta":
+                        full_content += delta.get("text", "")
+                    elif delta_type == "input_json_delta":
+                        idx = data.get("index", current_block_idx)
+                        if idx in tool_calls:
+                            tool_calls[idx]["function"]["arguments"] += delta.get(
+                                "partial_json", ""
+                            )
+
+                elif event_type == "message_stop":
+                    break
+
+            message: Dict[str, Any] = {"role": "assistant"}
+            if full_content:
+                message["content"] = full_content
+            if tool_calls:
+                message["tool_calls"] = [
+                    tool_calls[i] for i in sorted(tool_calls)
+                ]
+
+            return {
+                "choices": [{"message": message, "finish_reason": "stop"}]
+            }
+
     async def stream_chat(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
     ) -> AsyncGenerator[str, None]:
         """Yield text content token-by-token for live display."""
+        if self.config.api_format == "anthropic":
+            async for token in self._stream_anthropic_tokens(messages, tools):
+                yield token
+            return
+
         if self.config.api_format == "chat_completions":
             async for token in self._stream_chat_completions_tokens(
                 messages, tools
@@ -508,6 +743,62 @@ class LLMClient:
                             content = choices[0].get("delta", {}).get("content")
                             if content:
                                 yield content
+                    except json.JSONDecodeError:
+                        continue
+
+        except asyncio.CancelledError:
+            raise
+        except httpx.HTTPStatusError as e:
+            raise RuntimeError(
+                f"HTTP {e.response.status_code}: {e.response.text}"
+            )
+        except Exception as e:
+            raise RuntimeError(f"Stream request failed: {e}")
+
+    async def _stream_anthropic_tokens(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+    ) -> AsyncGenerator[str, None]:
+        """Yield text tokens from an Anthropic Messages streaming response."""
+        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(messages)
+
+        payload: Dict[str, Any] = {
+            "model": self.config.model,
+            "messages": anthropic_msgs,
+            "max_tokens": self.config.max_tokens,
+            "stream": True,
+        }
+
+        if system_prompt:
+            payload["system"] = system_prompt
+        if self.config.temperature is not None:
+            payload["temperature"] = self.config.temperature
+        if tools:
+            payload["tools"] = self._convert_anthropic_tools(tools)
+
+        url = self.config.api_base.rstrip("/")
+
+        try:
+            async with self.client.stream(
+                "POST", url, headers=self.headers, json=payload
+            ) as response:
+                response.raise_for_status()
+
+                async for line in response.aiter_lines():
+                    if not line.strip() or not line.startswith("data: "):
+                        continue
+
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
+
+                    try:
+                        data = json.loads(data_str)
+                        if data.get("type") == "content_block_delta":
+                            delta = data.get("delta", {})
+                            if delta.get("type") == "text_delta":
+                                yield delta.get("text", "")
                     except json.JSONDecodeError:
                         continue
 

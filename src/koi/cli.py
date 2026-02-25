@@ -11,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from .agent import Agent
-from .config import Config, create_default_config
+from .config import Config, create_default_config, load_claude_code_api_key
 from .cron import CronManager
 from .llm import LLMClient
 from .memory import Memory
@@ -41,6 +41,14 @@ MODEL_PRESETS = {
         "api_base": "https://inference-api.nvidia.com/v1/chat/completions",
         "api_format": "chat_completions",
         "context_window": 200000,
+    },
+    "3": {
+        "name": "Claude Opus 4.6 (via Claude Code)",
+        "model": "claude-opus-4-20250514",
+        "api_base": "https://api.anthropic.com/v1/messages",
+        "api_format": "anthropic",
+        "context_window": 200000,
+        "claude_code_key": True,
     },
 }
 
@@ -81,8 +89,22 @@ def init(force: bool):
 
         api_base = preset["api_base"]
 
-        api_key = click.prompt("\nAPI Key")
-        if api_key:
+        if preset.get("claude_code_key"):
+            cc_key = load_claude_code_api_key()
+            if cc_key:
+                masked = cc_key[:12] + "..." + cc_key[-4:]
+                console.print(f"\n✅ Found Claude Code API key: {masked}")
+                api_key = cc_key
+            else:
+                console.print(
+                    "\n⚠️  No Claude Code API key found in ~/.claude.json.",
+                    style="yellow",
+                )
+                console.print("Run 'claude auth login' first, or enter a key manually.")
+                api_key = click.prompt("API Key (sk-ant-...)")
+        else:
+            api_key = click.prompt("\nAPI Key")
+        if api_key and not preset.get("claude_code_key"):
             masked = api_key[:4] + "*" * (len(api_key) - 4)
             console.print(f"  Key: {masked}")
 
@@ -317,6 +339,87 @@ commands:
                 "You can fix settings in .koi/config.json later.",
                 style="yellow",
             )
+
+
+@main.command()
+def switch():
+    """Switch model/backend without resetting skills, memory, or project instructions."""
+    koi_dir = Path.cwd() / ".koi"
+    config_path = koi_dir / "config.json"
+
+    if not config_path.exists():
+        console.print("❌ No .koi/config.json found. Run 'koi init' first.", style="red")
+        return
+
+    console.print("\n🐠 Switch Backend\n", style="bold blue")
+
+    console.print("Select a model:")
+    for key, preset in MODEL_PRESETS.items():
+        console.print(f"  [{key}] {preset['name']} ({preset['model']})")
+
+    choice = click.prompt(
+        ">",
+        type=click.Choice(list(MODEL_PRESETS.keys())),
+        default="1",
+        show_choices=False,
+        show_default=False,
+    )
+    preset = MODEL_PRESETS[choice]
+
+    api_base = preset["api_base"]
+
+    if preset.get("claude_code_key"):
+        cc_key = load_claude_code_api_key()
+        if cc_key:
+            masked = cc_key[:12] + "..." + cc_key[-4:]
+            console.print(f"\n✅ Found Claude Code API key: {masked}")
+            api_key = cc_key
+        else:
+            console.print(
+                "\n⚠️  No Claude Code API key found in ~/.claude.json.",
+                style="yellow",
+            )
+            console.print("Run 'claude auth login' first, or enter a key manually.")
+            api_key = click.prompt("API Key (sk-ant-...)")
+    else:
+        api_key = click.prompt("\nAPI Key")
+
+    # Load existing config to preserve non-backend settings
+    with open(config_path, "r") as f:
+        existing = json.load(f)
+
+    existing["api_base"] = api_base
+    existing["api_key"] = api_key
+    existing["model"] = preset["model"]
+    existing["api_format"] = preset["api_format"]
+    existing["context_window"] = preset["context_window"]
+
+    with open(config_path, "w") as f:
+        json.dump(existing, f, indent=2)
+
+    console.print(f"\n✅ Switched to {preset['name']}", style="green")
+
+    # Quick connection test
+    try:
+        cfg = Config.load(config_path)
+        async def _test():
+            llm = LLMClient(cfg)
+            try:
+                await llm.chat([
+                    {"role": "user", "content": "Say ok"},
+                ])
+                return True
+            finally:
+                await llm.close()
+
+        import asyncio
+        asyncio.run(_test())
+        console.print("✅ Connection verified", style="green")
+    except Exception:
+        console.print(
+            "⚠️  Could not connect to API. Check .koi/config.json.",
+            style="yellow",
+        )
 
 
 @main.command()
