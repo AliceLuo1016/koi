@@ -1,5 +1,6 @@
 """Tool definitions and execution for koi agent."""
 
+import asyncio
 import json
 import os
 import platform
@@ -299,6 +300,9 @@ class ToolExecutor:
                     "success": False
                 }
         
+        except asyncio.CancelledError:
+            raise
+
         except Exception as e:
             return {
                 "error": f"Tool execution failed: {e}",
@@ -408,39 +412,61 @@ class ToolExecutor:
                 "needs_confirmation": True,
                 "success": False
             }
-        
+
         timeout = timeout or 60
-        
+
         try:
             # Set working directory
-            work_dir = Path(cwd) if cwd else None
-            
+            work_dir = str(Path(cwd)) if cwd else None
+
             # Use sandboxed environment (only allowlisted vars)
             env = self.sandbox.get_safe_env()
-            process = subprocess.run(
+            process = await asyncio.create_subprocess_shell(
                 command,
-                shell=True,
-                capture_output=True,
-                text=True,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
                 cwd=work_dir,
                 env=env,
                 executable="/bin/bash",
-                timeout=timeout
             )
-            
+
+            try:
+                stdout_bytes, stderr_bytes = await asyncio.wait_for(
+                    process.communicate(), timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    process.kill()
+                return {
+                    "error": f"Command timed out after {timeout} seconds",
+                    "success": False
+                }
+
+            stdout = stdout_bytes.decode("utf-8", errors="replace")
+            stderr = stderr_bytes.decode("utf-8", errors="replace")
+
             return {
-                "stdout": process.stdout,
-                "stderr": process.stderr,
+                "stdout": stdout,
+                "stderr": stderr,
                 "exit_code": process.returncode,
                 "success": process.returncode == 0
             }
-        
-        except subprocess.TimeoutExpired:
-            return {
-                "error": f"Command timed out after {timeout} seconds",
-                "success": False
-            }
-        
+
+        except asyncio.CancelledError:
+            # Kill the subprocess on cancellation
+            try:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    process.kill()
+            except (NameError, ProcessLookupError):
+                pass
+            raise
+
         except Exception as e:
             return {"error": str(e), "success": False}
     

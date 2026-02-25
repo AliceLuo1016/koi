@@ -1,4 +1,5 @@
 .koi
+.claude
 .venv/
 .env
 __pycache__/
@@ -7,3 +8,5 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+CLAUDE.md
+

@@ -1,5 +1,6 @@
 """Context window management and compaction for koi agent."""
 
+import asyncio
 import json
 from typing import List, Dict, Any
 import tiktoken
@@ -85,6 +86,9 @@ class ContextCompactor:
 
             # Return compacted conversation
             return [summary_message] + to_keep
+
+        except asyncio.CancelledError:
+            raise
 
         except Exception as e:
             # If compaction fails, just truncate

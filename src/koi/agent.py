@@ -1,8 +1,9 @@
 """Main agent implementation with conversation loop."""
 
+import asyncio
 import json
 import signal
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from rich.console import Console
 from rich.text import Text
 from prompt_toolkit import PromptSession
@@ -35,6 +36,7 @@ class Agent:
 
         self.messages: List[Dict[str, Any]] = []
         self.running = False
+        self._current_task: Optional[asyncio.Task] = None
         self._prompt_session = None
 
         if not non_interactive:
@@ -63,13 +65,14 @@ class Agent:
     async def run_interactive(self):
         """Run interactive agent session."""
         self.running = True
-        
-        # Set up signal handler for graceful shutdown
-        signal.signal(signal.SIGINT, self._signal_handler)
-        
+
+        # Set up async-safe signal handler
+        loop = asyncio.get_running_loop()
+        loop.add_signal_handler(signal.SIGINT, self._handle_sigint)
+
         console.print("🐠 [bold cyan]Koi Agent[/bold cyan] - Ready to help!", style="bold")
         console.print("Type '/exit' to quit, '/help' for commands, Option+Enter (Alt+Enter) for newline\n")
-        
+
         try:
             while self.running:
                 # Get user input
@@ -81,25 +84,36 @@ class Agent:
                 except EOFError:
                     console.print("\n👋 Goodbye!", style="yellow")
                     break
-                
+
                 if not user_input:
                     continue
-                
+
                 # Handle special commands
                 if user_input.startswith('/'):
                     await self._handle_command(user_input)
                     continue
-                
+
                 # Add user message
                 self.messages.append({
                     "role": "user",
                     "content": user_input
                 })
-                
-                # Process with agent loop
-                await self._agent_loop()
-        
+
+                # Run agent loop as a cancellable task
+                self._current_task = asyncio.create_task(self._agent_loop())
+                try:
+                    await self._current_task
+                except asyncio.CancelledError:
+                    # Roll back partial messages from the interrupted iteration only;
+                    # completed iterations are preserved.
+                    snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
+                    self.messages = self.messages[:snapshot]
+                    console.print("[dim]Operation cancelled.[/dim]")
+                finally:
+                    self._current_task = None
+
         finally:
+            loop.remove_signal_handler(signal.SIGINT)
             await self.llm_client.close()
     
     async def run_task(self, task: str, non_interactive: bool = False):
@@ -112,17 +126,28 @@ class Agent:
             print(f"{'='*60}")
         else:
             console.print(f"🐠 [bold cyan]Koi Agent[/bold cyan] - Running task: {task}")
-        
+
         # Add task as user message
         self.messages.append({
             "role": "user",
             "content": task
         })
-        
+
         try:
-            # Process with agent loop
-            await self._agent_loop(non_interactive=non_interactive)
-        
+            # Run agent loop as a cancellable task
+            self._current_task = asyncio.create_task(
+                self._agent_loop(non_interactive=non_interactive)
+            )
+            try:
+                await self._current_task
+            except asyncio.CancelledError:
+                snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
+                self.messages = self.messages[:snapshot]
+                if not non_interactive:
+                    console.print("[dim]Operation cancelled.[/dim]")
+            finally:
+                self._current_task = None
+
         finally:
             await self.llm_client.close()
     
@@ -135,6 +160,11 @@ class Agent:
             tools = [t for t in tools if t["function"]["name"] not in cron_tool_names]
         
         while True:
+            # Snapshot for fine-grained rollback on cancellation:
+            # if cancelled mid-iteration, only the current iteration's
+            # messages are rolled back (preserving completed iterations).
+            self._iter_msg_snapshot = len(self.messages)
+
             # Check if compaction is needed
             if self.compactor.needs_compaction(self.messages):
                 if not non_interactive:
@@ -218,6 +248,9 @@ class Agent:
                     self.messages.append(message)
                     break
             
+            except asyncio.CancelledError:
+                raise
+
             except Exception as e:
                 error_msg = f"❌ Error: {e}"
                 console.print(error_msg, style="red")
@@ -237,6 +270,9 @@ class Agent:
                     console.print(Text(msg["content"]))
 
             return response
+
+        except asyncio.CancelledError:
+            raise
 
         except Exception as e:
             raise RuntimeError(f"LLM request failed: {e}")
@@ -311,11 +347,15 @@ Just type your requests normally and I'll help you with tasks using available to
 """
         console.print(help_text)
     
-    def _signal_handler(self, signum, frame):
-        """Handle SIGINT (Ctrl+C). First press: graceful, second: force exit."""
-        if not self.running:
-            # Already shutting down — force exit immediately
-            console.print("\n👋 Force quit.", style="yellow")
-            raise SystemExit(0)
-        console.print("\n🔄 Shutting down... (press Ctrl+C again to force quit)", style="yellow")
-        self.running = False
+    def _handle_sigint(self):
+        """Handle SIGINT (Ctrl+C) from the event loop.
+
+        If an agent task is running, cancel it for immediate interruption.
+        Otherwise, raise KeyboardInterrupt so prompt_toolkit's handler
+        (the except KeyboardInterrupt at the prompt) can process it.
+        """
+        if self._current_task and not self._current_task.done():
+            self._current_task.cancel()
+            console.print("\n[yellow]Interrupted.[/yellow]")
+        else:
+            raise KeyboardInterrupt

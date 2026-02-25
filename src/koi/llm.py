@@ -255,6 +255,9 @@ class LLMClient:
                 delay = 2 ** attempt
                 await asyncio.sleep(delay)
 
+            except asyncio.CancelledError:
+                raise
+
             except Exception as e:
                 raise RuntimeError(f"Request failed: {e}")
 
@@ -458,6 +461,8 @@ class LLMClient:
                     except json.JSONDecodeError:
                         continue
 
+        except asyncio.CancelledError:
+            raise
         except httpx.HTTPStatusError as e:
             raise RuntimeError(
                 f"HTTP {e.response.status_code}: {e.response.text}"
@@ -498,6 +503,8 @@ class LLMClient:
                     except json.JSONDecodeError:
                         continue
 
+        except asyncio.CancelledError:
+            raise
         except httpx.HTTPStatusError as e:
             raise RuntimeError(
                 f"HTTP {e.response.status_code}: {e.response.text}"
