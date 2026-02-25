@@ -6,6 +6,7 @@ import signal
 from typing import List, Dict, Any, Optional
 from rich.console import Console
 from rich.text import Text
+from rich.markdown import Markdown
 from prompt_toolkit import PromptSession
 from prompt_toolkit.key_binding import KeyBindings
 
@@ -273,7 +274,7 @@ class Agent:
             if response.get("choices"):
                 msg = response["choices"][0]["message"]
                 if msg.get("content"):
-                    console.print(Text(msg["content"]))
+                    console.print(Markdown(msg["content"]))
 
             return response
 
@@ -298,7 +299,7 @@ class Agent:
             memory_content = self.memory.load()
             if memory_content.strip():
                 console.print("[bold blue]Current Memory:[/bold blue]")
-                console.print(memory_content)
+                console.print(Markdown(memory_content))
             else:
                 console.print("Memory is empty.", style="yellow")
         

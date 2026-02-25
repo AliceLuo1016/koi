@@ -9,6 +9,7 @@ from typing import Optional
 import click
 from rich.console import Console
 from rich.table import Table
+from rich.markdown import Markdown
 
 from .agent import Agent
 from .config import Config, create_default_config, load_claude_code_api_key
@@ -595,7 +596,7 @@ def memory():
             return
         
         console.print("[bold blue]Current Memory:[/bold blue]")
-        console.print(content)
+        console.print(Markdown(content))
     
     except Exception as e:
         console.print(f"❌ Error loading memory: {e}", style="red")
