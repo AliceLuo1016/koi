@@ -16,7 +16,8 @@ class LLMClient:
     """
 
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
-    MAX_RETRIES = 3
+    MAX_RETRIES = 6
+    MAX_BACKOFF = 60
 
     def __init__(self, config: Config):
         self.config = config
@@ -247,12 +248,19 @@ class LLMClient:
                     raise RuntimeError(
                         f"HTTP {e.response.status_code}: {e.response.text}"
                     )
-                delay = 2 ** attempt
+                retry_after = e.response.headers.get("retry-after")
+                if retry_after:
+                    try:
+                        delay = min(float(retry_after), self.MAX_BACKOFF)
+                    except ValueError:
+                        delay = min(2 ** (attempt + 1), self.MAX_BACKOFF)
+                else:
+                    delay = min(2 ** (attempt + 1), self.MAX_BACKOFF)
                 await asyncio.sleep(delay)
 
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
                 last_error = e
-                delay = 2 ** attempt
+                delay = min(2 ** (attempt + 1), self.MAX_BACKOFF)
                 await asyncio.sleep(delay)
 
             except asyncio.CancelledError:

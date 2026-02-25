@@ -66,9 +66,10 @@ class Agent:
         """Run interactive agent session."""
         self.running = True
 
-        # Set up async-safe signal handler
-        loop = asyncio.get_running_loop()
-        loop.add_signal_handler(signal.SIGINT, self._handle_sigint)
+        # Use signal.signal (not loop.add_signal_handler) so that:
+        # 1. raise KeyboardInterrupt properly interrupts prompt_toolkit
+        # 2. task.cancel() fires immediately from the main thread
+        prev_handler = signal.signal(signal.SIGINT, self._handle_sigint)
 
         console.print("🐠 [bold cyan]Koi Agent[/bold cyan] - Ready to help!", style="bold")
         console.print("Type '/exit' to quit, '/help' for commands, Option+Enter (Alt+Enter) for newline\n")
@@ -113,7 +114,7 @@ class Agent:
                     self._current_task = None
 
         finally:
-            loop.remove_signal_handler(signal.SIGINT)
+            signal.signal(signal.SIGINT, prev_handler)
             await self.llm_client.close()
     
     async def run_task(self, task: str, non_interactive: bool = False):
@@ -347,8 +348,8 @@ Just type your requests normally and I'll help you with tasks using available to
 """
         console.print(help_text)
     
-    def _handle_sigint(self):
-        """Handle SIGINT (Ctrl+C) from the event loop.
+    def _handle_sigint(self, signum, frame):
+        """Handle SIGINT (Ctrl+C).
 
         If an agent task is running, cancel it for immediate interruption.
         Otherwise, raise KeyboardInterrupt so prompt_toolkit's handler
