@@ -2,6 +2,17 @@
 
 Terminal-based AI agent with memory, tool calling, skills, sandbox security, and system cron integration. Built for developers who want a powerful AI assistant that lives in their terminal.
 
+## Documentation
+
+- [**Quick Start**](#quick-start) - Get up and running
+- [**Configuration Guide**](CONFIG_GUIDE.md) - Detailed configuration options
+- [**Developer Guide**](DEVELOPER.md) - Extend Koi with custom tools and skills
+- [**Architecture**](ARCHITECTURE.md) - System design and components
+- [**Troubleshooting**](TROUBLESHOOTING.md) - Common issues and solutions
+- [**Changelog**](CHANGELOG.md) - Version history and updates
+- [**Examples**](EXAMPLE.md) - Usage examples
+- [**Best Practices**](BEST-PRACTICES.md) - Tips and workflows
+
 ## Features
 
 - **Conversational AI**: Chat naturally with an AI agent that can think and use tools
@@ -54,7 +65,34 @@ Edit `.koi/config.json`:
 }
 ```
 
-The `api_base` should point to an OpenAI-compatible Responses API endpoint. You can also set `KOI_API_KEY` as an environment variable instead of putting your key in the config file.
+#### API Provider Support
+
+Koi supports multiple AI providers:
+
+**OpenAI-compatible Responses API (Default):**
+```json
+{
+  "api_base": "https://api.example.com/v1/responses",
+  "api_key": "your-api-key-here",
+  "model": "your-model-name",
+  "api_format": "responses"  // Optional, auto-detected
+}
+```
+
+**Anthropic Claude API:**
+```json
+{
+  "api_base": "https://api.anthropic.com",
+  "api_key": "sk-ant-...",
+  "model": "claude-3-opus-20240229",
+  "api_format": "anthropic"  // Optional, auto-detected
+}
+```
+
+**Notes:**
+- The `api_format` is auto-detected from the model name. Models containing "anthropic" or "claude" automatically use the Anthropic format.
+- Set `KOI_API_KEY` as an environment variable to avoid storing keys in config files.
+- **Claude Code Integration**: If using Claude Code with `claude auth`, Koi automatically uses your API key from `~/.claude.json` for Anthropic models.
 
 ### Start Chatting
 
