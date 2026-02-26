@@ -266,6 +266,8 @@ environment:
     - PYTHONPATH
     - VIRTUAL_ENV
     - NODE_PATH
+    - SSH_AUTH_SOCK
+    - SSH_AGENT_PID
 
 # Shell command restrictions
 commands:

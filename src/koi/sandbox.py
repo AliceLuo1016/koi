@@ -35,7 +35,7 @@ class Sandbox:
         creds = fs.get("credentials_path", ".koi/credentials")
         self.credentials_path = self._resolve(creds)
 
-        self.env_allowlist = set(env.get("allowlist", ["PATH", "HOME", "USER", "SHELL", "LANG", "TERM"]))
+        self.env_allowlist = set(env.get("allowlist", ["PATH", "HOME", "USER", "SHELL", "LANG", "TERM", "SSH_AUTH_SOCK", "SSH_AGENT_PID"]))
 
         self.blocked_patterns = [re.compile(p, re.IGNORECASE) for p in cmd.get("blocked_patterns", [])]
         self.confirm_patterns = [re.compile(p, re.IGNORECASE) for p in cmd.get("confirm_patterns", [])]
