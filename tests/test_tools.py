@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import yaml
 
@@ -823,3 +823,220 @@ async def test_tool_executor_web_fetch_http_error():
 
     assert result["success"] is False
     assert "Connection refused" in result["error"]
+
+
+# ── Additional coverage: edge cases and exception paths ──
+
+
+async def test_tool_executor_read_file_is_directory():
+    """read_file returns error when path points to a directory."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        executor = ToolExecutor(Mock(), sandbox)
+
+        tool_call = {
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is False
+        assert "not a file" in result["error"].lower()
+
+
+async def test_tool_executor_edit_file_long_text_uses_summary_diff():
+    """edit_file produces character-count summary when text exceeds 200 chars."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        test_file = Path(temp_dir) / "big.txt"
+        old_text = "A" * 250
+        new_text = "B" * 250
+        test_file.write_text(old_text)
+
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "edit_file",
+                "arguments": json.dumps({
+                    "path": str(test_file),
+                    "old_text": old_text,
+                    "new_text": new_text,
+                }),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert "characters" in result["message"]
+
+
+async def test_tool_executor_execute_tool_outer_exception():
+    """execute_tool outer except catches TypeError from bad kwargs."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        executor = ToolExecutor(Mock(), sandbox)
+
+        # Pass an unexpected kwarg so the dispatch call raises TypeError
+        # before entering _read_file's own try/except
+        tool_call = {
+            "function": {
+                "name": "read_file",
+                "arguments": json.dumps({"path": temp_dir, "bogus_kwarg": True}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is False
+        assert "Tool execution failed" in result["error"]
+
+
+async def test_tool_executor_add_cron_job_success():
+    """add_cron_job tool returns job_id from CronManager."""
+    executor = ToolExecutor(Mock())
+
+    with patch("koi.cron.CronManager") as MockCron:
+        MockCron.return_value.add_job.return_value = "abc-123"
+        tool_call = {
+            "function": {
+                "name": "add_cron_job",
+                "arguments": json.dumps({"schedule": "0 * * * *", "task": "run checks"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is True
+    assert result["job_id"] == "abc-123"
+    assert "abc-123" in result["message"]
+
+
+async def test_tool_executor_add_cron_job_error():
+    """add_cron_job returns error when CronManager.add_job raises."""
+    executor = ToolExecutor(Mock())
+
+    with patch("koi.cron.CronManager") as MockCron:
+        MockCron.return_value.add_job.side_effect = RuntimeError("cron failed")
+        tool_call = {
+            "function": {
+                "name": "add_cron_job",
+                "arguments": json.dumps({"schedule": "bad", "task": "thing"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is False
+    assert "cron failed" in result["error"]
+
+
+async def test_tool_executor_list_cron_jobs_success():
+    """list_cron_jobs returns job list and count."""
+    executor = ToolExecutor(Mock())
+
+    with patch("koi.cron.CronManager") as MockCron:
+        MockCron.return_value.list_jobs.return_value = [
+            {"id": "j1", "schedule": "0 * * * *", "task": "do stuff"}
+        ]
+        tool_call = {
+            "function": {
+                "name": "list_cron_jobs",
+                "arguments": json.dumps({}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is True
+    assert result["count"] == 1
+    assert result["jobs"][0]["id"] == "j1"
+
+
+async def test_tool_executor_list_cron_jobs_empty():
+    """list_cron_jobs returns empty list when no jobs exist."""
+    executor = ToolExecutor(Mock())
+
+    with patch("koi.cron.CronManager") as MockCron:
+        MockCron.return_value.list_jobs.return_value = []
+        tool_call = {
+            "function": {
+                "name": "list_cron_jobs",
+                "arguments": json.dumps({}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is True
+    assert result["count"] == 0
+
+
+async def test_tool_executor_list_cron_jobs_error():
+    """list_cron_jobs returns error when CronManager raises."""
+    executor = ToolExecutor(Mock())
+
+    with patch("koi.cron.CronManager") as MockCron:
+        MockCron.return_value.list_jobs.side_effect = RuntimeError("no cron")
+        tool_call = {
+            "function": {
+                "name": "list_cron_jobs",
+                "arguments": json.dumps({}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is False
+    assert "no cron" in result["error"]
+
+
+async def test_tool_executor_remove_cron_job_success():
+    """remove_cron_job removes a job and returns success message."""
+    executor = ToolExecutor(Mock())
+
+    with patch("koi.cron.CronManager") as MockCron:
+        MockCron.return_value.remove_job.return_value = None
+        tool_call = {
+            "function": {
+                "name": "remove_cron_job",
+                "arguments": json.dumps({"job_id": "j1"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is True
+    assert "j1" in result["message"]
+
+
+async def test_tool_executor_remove_cron_job_error():
+    """remove_cron_job returns error when CronManager raises."""
+    executor = ToolExecutor(Mock())
+
+    with patch("koi.cron.CronManager") as MockCron:
+        MockCron.return_value.remove_job.side_effect = KeyError("job not found")
+        tool_call = {
+            "function": {
+                "name": "remove_cron_job",
+                "arguments": json.dumps({"job_id": "missing"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+
+    assert result["success"] is False
+
+
+async def test_tool_executor_update_memory_error():
+    """update_memory returns error when Memory.append raises."""
+    import os
+
+    with TemporaryDirectory() as temp_dir:
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            executor = ToolExecutor(Mock())
+            with patch("koi.memory.Memory") as MockMem:
+                MockMem.return_value.append.side_effect = OSError("disk full")
+                tool_call = {
+                    "function": {
+                        "name": "update_memory",
+                        "arguments": json.dumps({"content": "something"}),
+                    }
+                }
+                result = await executor.execute_tool(tool_call)
+            assert result["success"] is False
+            assert "disk full" in result["error"]
+        finally:
+            os.chdir(old_cwd)

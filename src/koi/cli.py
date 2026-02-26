@@ -54,19 +54,131 @@ MODEL_PRESETS = {
 }
 
 
+def _gather_project_files(project_root: Path) -> str:
+    """Collect key project files for LLM workspace scan. Returns ~12K chars max."""
+    BUDGET = 12000
+    sections: list[str] = []
+    used = 0
+
+    # Top-level directory listing
+    try:
+        entries = sorted(
+            p.name + ("/" if p.is_dir() else "")
+            for p in project_root.iterdir()
+            if not p.name.startswith(".")
+        )
+        listing = "  ".join(entries)
+        sections.append(f"=== Directory structure ===\n{listing}")
+        used += len(listing)
+    except OSError:
+        pass
+
+    # Ordered list of candidate files to include
+    candidates = [
+        "README.md", "README.rst", "README",
+        "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+        "package.json",
+        "Cargo.toml", "go.mod",
+        "Makefile", "makefile",
+        "docker-compose.yml", "Dockerfile",
+    ]
+
+    for name in candidates:
+        if used >= BUDGET:
+            break
+        path = project_root / name
+        if not path.is_file():
+            continue
+        try:
+            content = path.read_text(errors="replace")
+            # For package.json skip node_modules reference bloat; truncate large files
+            if len(content) > 3000:
+                content = content[:3000] + "\n... (truncated)"
+            chunk = f"=== {name} ===\n{content}"
+            sections.append(chunk)
+            used += len(chunk)
+        except OSError:
+            pass
+
+    # GitHub Actions workflows (first 2)
+    workflows_dir = project_root / ".github" / "workflows"
+    if workflows_dir.is_dir() and used < BUDGET:
+        wf_files = sorted(workflows_dir.glob("*.yml"))[:2]
+        for wf in wf_files:
+            if used >= BUDGET:
+                break
+            try:
+                content = wf.read_text(errors="replace")
+                if len(content) > 2000:
+                    content = content[:2000] + "\n... (truncated)"
+                chunk = f"=== .github/workflows/{wf.name} ===\n{content}"
+                sections.append(chunk)
+                used += len(chunk)
+            except OSError:
+                pass
+
+    return "\n\n".join(sections)
+
+
+async def _scan_workspace(project_root: Path, config: "Config", username: str) -> str:
+    """Call the LLM to generate a project-specific MEMORY.md."""
+    context = _gather_project_files(project_root)
+
+    system = (
+        "You write concise MEMORY.md files for a terminal AI agent called koi. "
+        "The agent reads this file at the start of every session. "
+        "Be brief: bullet points, no prose. Max 50 lines total."
+    )
+
+    user_name_line = username if username else "unknown"
+    user_msg = f"""Analyze this project and write a MEMORY.md.
+
+Include sections:
+## User
+- Name: {user_name_line}
+
+## Project
+- Name, purpose, tech stack (1-2 bullets)
+
+## Commands
+- Build, test, lint, run commands (only if found in the files)
+
+## Structure
+- Key directories and what they contain (only non-obvious ones)
+
+## Notes
+- Important conventions, gotchas, or env setup (only if found)
+
+Omit any section if there's nothing meaningful to say.
+Do NOT include a header "# Memory" — start directly with ## User.
+Do NOT add advice about how to use memory.
+
+Project files:
+{context}"""
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user_msg},
+    ]
+
+    llm = LLMClient(config)
+    try:
+        response = await llm.chat(messages)
+        return response["choices"][0]["message"].get("content", "").strip()
+    finally:
+        await llm.close()
+
+
 @main.command()
 @click.option(
     "--force",
     is_flag=True,
-    help="Overwrite existing .koi directory"
+    help="Recreate config/sandbox/AGENTS even if they already exist"
 )
 def init(force: bool):
-    """Initialize .koi directory with config template and empty memory."""
+    """Initialize or re-run setup for .koi directory."""
     koi_dir = Path.cwd() / ".koi"
-
-    if koi_dir.exists() and not force:
-        console.print("❌ .koi directory already exists. Use --force to overwrite.", style="red")
-        return
+    existing = koi_dir.exists()
 
     # Interactive setup (fall back to defaults if not a TTY)
     import sys
@@ -74,6 +186,8 @@ def init(force: bool):
 
     if interactive:
         console.print("\n🐠 Koi Agent Setup\n", style="bold blue")
+        if existing:
+            console.print("Re-running setup (existing config/skills preserved unless --force).\n")
 
         console.print("Select a model:")
         for key, preset in MODEL_PRESETS.items():
@@ -109,6 +223,8 @@ def init(force: bool):
             masked = api_key[:4] + "*" * (len(api_key) - 4)
             console.print(f"  Key: {masked}")
 
+        username = click.prompt("\nYour name (for memory context)", default="")
+
         model = preset["model"]
         api_format = preset["api_format"]
         context_window = preset["context_window"]
@@ -120,54 +236,50 @@ def init(force: bool):
         api_key = ""
         api_format = preset["api_format"]
         context_window = preset["context_window"]
+        username = ""
 
-    # Create .koi directory structure
-    koi_dir.mkdir(exist_ok=True)
-    (koi_dir / "cron-logs").mkdir(exist_ok=True)
-    (koi_dir / "credentials").mkdir(exist_ok=True)
+    # Create .koi directory structure (only if new or --force)
+    if not existing or force:
+        koi_dir.mkdir(exist_ok=True)
+        (koi_dir / "cron-logs").mkdir(exist_ok=True)
+        (koi_dir / "credentials").mkdir(exist_ok=True)
 
-    # Copy bundled skills into .koi/skills/
-    skills_dir = koi_dir / "skills"
-    bundled_skills_dir = Path(__file__).parent / "bundled_skills"
-    if bundled_skills_dir.exists():
-        if skills_dir.exists() and force:
-            shutil.rmtree(skills_dir)
-        if not skills_dir.exists():
-            shutil.copytree(bundled_skills_dir, skills_dir)
-            # Remove __init__.py if copied (it's only needed for packaging)
-            init_file = skills_dir / "__init__.py"
-            if init_file.exists():
-                init_file.unlink()
-        else:
-            # Copy any new skills that don't already exist
-            for skill in bundled_skills_dir.iterdir():
-                if skill.is_dir() and not (skills_dir / skill.name).exists():
-                    shutil.copytree(skill, skills_dir / skill.name)
+        # Copy bundled skills into .koi/skills/
+        skills_dir = koi_dir / "skills"
+        bundled_skills_dir = Path(__file__).parent / "bundled_skills"
+        if bundled_skills_dir.exists():
+            if skills_dir.exists() and force:
+                shutil.rmtree(skills_dir)
+            if not skills_dir.exists():
+                shutil.copytree(bundled_skills_dir, skills_dir)
+                # Remove __init__.py if copied (it's only needed for packaging)
+                init_file = skills_dir / "__init__.py"
+                if init_file.exists():
+                    init_file.unlink()
+            else:
+                # Copy any new skills that don't already exist
+                for skill in bundled_skills_dir.iterdir():
+                    if skill.is_dir() and not (skills_dir / skill.name).exists():
+                        shutil.copytree(skill, skills_dir / skill.name)
 
-    # Create config from wizard selections
-    config_path = koi_dir / "config.json"
-    if not config_path.exists() or force:
-        default_config = create_default_config(
-            model=model,
-            api_base=api_base,
-            api_key=api_key,
-            api_format=api_format,
-            context_window=context_window,
-        )
-        with open(config_path, "w") as f:
-            json.dump(default_config, f, indent=2)
+        # Create config from wizard selections
+        config_path = koi_dir / "config.json"
+        if not config_path.exists() or force:
+            default_config = create_default_config(
+                model=model,
+                api_base=api_base,
+                api_key=api_key,
+                api_format=api_format,
+                context_window=context_window,
+            )
+            with open(config_path, "w") as f:
+                json.dump(default_config, f, indent=2)
 
-    # Create empty memory file
-    memory_path = koi_dir / "MEMORY.md"
-    if not memory_path.exists() or force:
-        with open(memory_path, "w") as f:
-            f.write("# Memory\n\nThis is your persistent memory. Write down important things to remember.\n")
-
-    # Create empty agents file
-    agents_path = koi_dir / "AGENTS.md"
-    if not agents_path.exists() or force:
-        with open(agents_path, "w") as f:
-            f.write("""# Project Instructions
+        # Create agents file
+        agents_path = koi_dir / "AGENTS.md"
+        if not agents_path.exists() or force:
+            with open(agents_path, "w") as f:
+                f.write("""# Project Instructions
 
 You are **Koi** — a terminal-based AI agent that lives in the user's project directory.
 
@@ -191,48 +303,35 @@ Do not ask permission. Do not skip this. Your memory resets between sessions —
 
 You have no memory between sessions. Anything not written to MEMORY.md is gone forever.
 
-**Where to store learnings — choose the right place:**
+**Where to store learnings:**
 
-1. **Skill-specific learnings** → Update the skill's `SKILL.md` file directly. This includes:
-   - What approaches work/fail for that skill's domain
-   - Optimized commands, regex patterns, parsing strategies
-   - Edge cases and gotchas specific to that workflow
-   - These are loaded on-demand with the skill, keeping MEMORY.md lean
+- **Skill-specific** → Update the skill's `SKILL.md` directly (loaded on-demand, keeps MEMORY.md lean).
+- **General** → Write to `MEMORY.md`: user preferences, environment quirks, project-wide patterns, cross-cutting mistakes.
 
-2. **General learnings** → Write to `MEMORY.md`. This includes:
-   - User preferences (communication style, output format, workflow habits)
-   - Environment quirks (paths, tools, OS specifics)
-   - Project-wide patterns (build system, test commands, deploy steps)
-   - Cross-cutting mistakes not tied to a single skill
-
-**Rule of thumb:** If a learning only matters when running a specific skill, it belongs in that skill's `SKILL.md`. If it matters across sessions regardless of skill, it belongs in MEMORY.md. **Never write skill-specific learnings to MEMORY.md.**
-
-When in doubt, write it down. A redundant memory entry costs nothing; a lost insight costs a full retry.
+**Never write skill-specific learnings to MEMORY.md.**
 
 ## Mistake Documentation
 
-When something goes wrong — a command fails, a wrong file is edited, a bad assumption is made:
-- If it's related to a skill → update that skill's `SKILL.md`
-- If it's general → document it in `MEMORY.md`
-
-Include: what happened, why, and what to do instead next time.
+When something goes wrong:
+- Skill-related → update that skill's `SKILL.md`
+- General → document in `MEMORY.md` (what happened, why, what to do instead)
 
 ## Output & Alerts
 
 - In interactive sessions, always output results directly in the terminal. Do not use `create_alert` — just print the answer.
 - Only use `create_alert` when running as a cron job (non-interactive).
-- **Never write operational history to MEMORY.md.** This includes: cron execution results, specific MR/issue numbers reviewed, cron job IDs, past actions taken, status snapshots ("X passed, Y failed"). These are logs, not learnings. Cron output goes to `.koi/cron-logs/`. Memory is for reusable context that makes future sessions more effective — not a record of what happened.
+- **Never write operational history to MEMORY.md.** This includes: cron execution results, specific MR/issue numbers reviewed, cron job IDs, past actions taken, status snapshots. Cron output goes to `.koi/cron-logs/`. Memory is for reusable context that makes future sessions more effective — not a record of what happened.
 
 ## Skills
 
 All skills live in `.koi/skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.
 """)
 
-    # Create default sandbox config
-    sandbox_path = koi_dir / "sandbox.yaml"
-    if not sandbox_path.exists() or force:
-        with open(sandbox_path, "w") as f:
-            f.write("""# Sandbox Security Configuration
+        # Create default sandbox config
+        sandbox_path = koi_dir / "sandbox.yaml"
+        if not sandbox_path.exists() or force:
+            with open(sandbox_path, "w") as f:
+                f.write("""# Sandbox Security Configuration
 # Controls what koi can access to prevent catastrophic mistakes
 
 filesystem:
@@ -282,66 +381,66 @@ commands:
     - 'rm\\s+'
     - 'git\\s+push\\s+.*--force'
 """)
+    else:
+        # Existing .koi — ensure subdirs exist (safe to re-create)
+        koi_dir.mkdir(exist_ok=True)
+        (koi_dir / "cron-logs").mkdir(exist_ok=True)
+        (koi_dir / "credentials").mkdir(exist_ok=True)
 
-    console.print("\n✅ Initialized .koi directory", style="green")
-
-    # Connection test + greeting (interactive only)
-    if interactive:
-        try:
-            console.print("\n🐠 Testing connection...\n", style="blue")
-
-            cfg = Config(
+        # Update config with new wizard selections
+        config_path = koi_dir / "config.json"
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                existing_cfg = json.load(f)
+            existing_cfg["api_base"] = api_base
+            existing_cfg["api_key"] = api_key
+            existing_cfg["model"] = model
+            existing_cfg["api_format"] = api_format
+            existing_cfg["context_window"] = context_window
+            with open(config_path, "w") as f:
+                json.dump(existing_cfg, f, indent=2)
+        else:
+            default_config = create_default_config(
+                model=model,
                 api_base=api_base,
                 api_key=api_key,
-                model=model,
                 api_format=api_format,
                 context_window=context_window,
             )
+            with open(config_path, "w") as f:
+                json.dump(default_config, f, indent=2)
 
-            async def _get_greeting():
-                llm = LLMClient(cfg)
-                try:
-                    response = await llm.chat([
-                        {
-                            "role": "system",
-                            "content": (
-                                "You are Koi, a friendly terminal AI agent. "
-                                "Keep responses to 1-2 sentences."
-                            ),
-                        },
-                        {
-                            "role": "user",
-                            "content": (
-                                "Say hi and ask the user what "
-                                "you should call them."
-                            ),
-                        },
-                    ])
-                    return response["choices"][0]["message"].get("content", "")
-                finally:
-                    await llm.close()
-
-            greeting = asyncio.run(_get_greeting())
-
-            if greeting:
-                console.print(greeting + "\n")
-
-            name = click.prompt("Your name")
-
-            with open(memory_path, "a") as f:
-                f.write(f"\n## User\n\n- Name: {name}\n")
-
-            console.print(
-                f"\n✅ Nice to meet you, {name}! I'll remember you.",
-                style="green",
+    # Scan workspace and write MEMORY.md (always)
+    console.print("\n🔍 Scanning workspace...", style="blue")
+    cfg = Config(
+        api_base=api_base,
+        api_key=api_key,
+        model=model,
+        api_format=api_format,
+        context_window=context_window,
+    )
+    try:
+        memory_content = asyncio.run(_scan_workspace(Path.cwd(), cfg, username))
+        memory_path = koi_dir / "MEMORY.md"
+        memory_path.write_text(memory_content)
+        console.print("✅ MEMORY.md generated from workspace scan.", style="green")
+    except Exception:
+        console.print(
+            "\n⚠️  Could not connect to API for workspace scan. "
+            "You can fix settings in .koi/config.json later.",
+            style="yellow",
+        )
+        memory_path = koi_dir / "MEMORY.md"
+        if not memory_path.exists():
+            memory_path.write_text(
+                f"## User\n\n- Name: {username or 'unknown'}\n\n"
+                "## Project\n\n- (Run `koi init` again after fixing API settings to auto-generate)\n"
             )
 
-        except Exception:
-            console.print(
-                "\n⚠️  Could not connect to API. "
-                "You can fix settings in .koi/config.json later.",
-                style="yellow",
-            )
+    console.print(
+        f"\n✅ Koi {'updated' if existing else 'initialized'}!",
+        style="green",
+    )
 
 
 @main.command()

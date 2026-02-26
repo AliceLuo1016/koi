@@ -1031,3 +1031,298 @@ async def test_chat_completions_url(cc_client):
     await cc_client.chat([{"role": "user", "content": "test"}])
 
     assert captured_url == "https://api.example.com/v1/chat/completions"
+
+
+# ── Additional coverage: conversion edge cases ──
+
+
+def test_convert_tools_passthrough_non_function(client):
+    """Non-function tools are passed through unchanged in _convert_tools."""
+    raw_tool = {"type": "computer_use", "display_width_px": 1024}
+    result = client._convert_tools([raw_tool])
+    assert result == [raw_tool]
+
+
+def test_convert_anthropic_tools_passthrough_non_function(client):
+    """Non-function tools pass through unchanged in _convert_anthropic_tools."""
+    raw_tool = {"type": "bash", "name": "bash"}
+    result = client._convert_anthropic_tools([raw_tool])
+    assert result == [raw_tool]
+
+
+def test_convert_messages_to_anthropic_assistant_with_text_and_tool_call(client):
+    """Assistant message with text content AND tool calls produces both block types."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": "Let me check that.",
+            "tool_calls": [
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "/tmp/x"}'},
+                }
+            ],
+        }
+    ]
+    _, anthropic_msgs = client._convert_messages_to_anthropic(messages)
+    blocks = anthropic_msgs[0]["content"]
+    block_types = [b["type"] for b in blocks]
+    assert "text" in block_types
+    assert "tool_use" in block_types
+
+
+def test_convert_messages_to_anthropic_malformed_tool_args_defaults_empty(client):
+    """Malformed JSON in tool_calls arguments is silently replaced with {}."""
+    messages = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "not-valid-json"},
+                }
+            ],
+        }
+    ]
+    _, anthropic_msgs = client._convert_messages_to_anthropic(messages)
+    tool_block = anthropic_msgs[0]["content"][0]
+    assert tool_block["type"] == "tool_use"
+    assert tool_block["input"] == {}
+
+
+# ── Retry: invalid retry-after header falls back to backoff ──
+
+
+async def test_retry_invalid_retry_after_falls_back_to_backoff(client):
+    """Non-numeric retry-after header falls back to exponential backoff delay."""
+    call_count = 0
+    sleep_delays = []
+
+    async def fake_sleep(d):
+        sleep_delays.append(d)
+
+    async def retryable_then_ok(url, headers=None, json=None):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 3:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 429
+            mock_resp.headers = {"retry-after": "not-a-number"}
+            mock_resp.text = "rate limited"
+            raise httpx.HTTPStatusError("429", request=MagicMock(), response=mock_resp)
+        ok = MagicMock()
+        ok.raise_for_status = lambda: None
+        ok.json.return_value = {
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]
+        }
+        return ok
+
+    client.client.post = retryable_then_ok
+    with patch("asyncio.sleep", side_effect=fake_sleep):
+        result = await client.chat([{"role": "user", "content": "hi"}])
+
+    # Should have fallen back to exponential backoff (not crash)
+    assert call_count == 3
+    assert len(sleep_delays) == 2
+    # Backoff values should be positive numbers, not from the bad header
+    assert all(d > 0 for d in sleep_delays)
+    assert result["choices"][0]["message"]["content"] == "ok"
+
+
+# ── Retry: non-HTTP exception raises immediately ──
+
+
+async def test_retry_non_http_exception_raises_immediately(client):
+    """Unexpected non-HTTP exceptions raise RuntimeError without retrying."""
+    call_count = 0
+
+    async def bad_post(url, headers=None, json=None):
+        nonlocal call_count
+        call_count += 1
+        raise ValueError("unexpected internal error")
+
+    client.client.post = bad_post
+    with pytest.raises(RuntimeError, match="Request failed"):
+        await client.chat([{"role": "user", "content": "hi"}])
+
+    assert call_count == 1  # No retries
+
+
+# ── Anthropic stream: blank/non-prefixed/malformed lines skipped ──
+
+
+async def test_stream_anthropic_skips_blank_and_malformed_lines():
+    """_stream_anthropic silently skips blank, non-data, and malformed-JSON lines."""
+    config = Config(
+        api_base="https://api.anthropic.com/v1/messages",
+        api_key="test-key",
+        model="claude-3",
+        api_format="anthropic",
+    )
+    anthro_client = LLMClient(config)
+
+    lines = [
+        "",                                # blank → skip
+        "event: ping",                     # no "data: " prefix → skip
+        "data: {malformed json",           # bad JSON → skip
+        'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}',
+        'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}}',
+        'data: {"type": "message_stop"}',
+    ]
+    anthro_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await anthro_client._stream_anthropic(
+        "https://api.anthropic.com/v1/messages", {}
+    )
+    assert result["choices"][0]["message"]["content"] == "hello"
+    await anthro_client.close()
+
+
+# ── CC stream: blank/malformed/empty-choices lines skipped ──
+
+
+async def test_stream_cc_skips_blank_malformed_empty_choices():
+    """_stream_chat_completions skips blank, malformed JSON, and empty-choices lines."""
+    cc2 = LLMClient(
+        Config(
+            api_base="https://api.example.com/v1/chat/completions",
+            api_key="k",
+            model="gpt-4",
+            api_format="chat_completions",
+        )
+    )
+    lines = [
+        "",                                        # blank → skip
+        "data: {bad json",                         # malformed → skip
+        'data: {"choices": []}',                   # empty choices → skip
+        'data: {"choices": [{"delta": {"content": "world"}}]}',
+        "data: [DONE]",
+    ]
+    cc2.client.stream = lambda *a, **kw: _StreamCtx(lines)
+    result = await cc2._stream_chat_completions(
+        "https://api.example.com/v1/chat/completions", {}
+    )
+    assert result["choices"][0]["message"]["content"] == "world"
+    await cc2.close()
+
+
+# ── Temperature in Anthropic payload ──
+
+
+async def test_anthropic_payload_includes_temperature():
+    """chat() includes temperature in the Anthropic payload when set."""
+    config = Config(
+        api_base="https://api.anthropic.com/v1/messages",
+        api_key="test-key",
+        model="claude-3",
+        api_format="anthropic",
+        temperature=0.7,
+    )
+    anthro_client = LLMClient(config)
+    captured: dict = {}
+
+    async def mock_post(url, headers=None, json=None):
+        captured.update(json)
+        resp = MagicMock()
+        resp.raise_for_status = lambda: None
+        resp.json.return_value = {
+            "content": [{"type": "text", "text": "ok"}],
+            "stop_reason": "end_turn",
+        }
+        return resp
+
+    anthro_client.client.post = mock_post
+    await anthro_client.chat([{"role": "user", "content": "hi"}])
+    assert captured.get("temperature") == 0.7
+    await anthro_client.close()
+
+
+# ── Token stream: HTTP errors raise RuntimeError ──
+
+
+async def test_stream_chat_http_error_raises_runtime_error(client):
+    """stream_chat (Responses format) raises RuntimeError on HTTP error."""
+    mock_req = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 500
+    mock_resp.text = "Internal Server Error"
+    error = httpx.HTTPStatusError("500", request=mock_req, response=mock_resp)
+
+    class _ErrorCtx:
+        async def __aenter__(self):
+            raise error
+        async def __aexit__(self, *_):
+            pass
+
+    client.client.stream = lambda *a, **kw: _ErrorCtx()
+    with pytest.raises(RuntimeError, match="HTTP 500"):
+        async for _ in client.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    await client.close()
+
+
+async def test_stream_cc_tokens_http_error_raises_runtime_error(cc_client):
+    """_stream_chat_completions_tokens raises RuntimeError on HTTP error."""
+    mock_req = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 503
+    mock_resp.text = "Service Unavailable"
+    error = httpx.HTTPStatusError("503", request=mock_req, response=mock_resp)
+
+    class _ErrorCtx:
+        async def __aenter__(self):
+            raise error
+        async def __aexit__(self, *_):
+            pass
+
+    cc_client.client.stream = lambda *a, **kw: _ErrorCtx()
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        async for _ in cc_client.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    await cc_client.close()
+
+
+async def test_stream_anthropic_tokens_http_error_raises_runtime_error():
+    """_stream_anthropic_tokens raises RuntimeError on HTTP error."""
+    config = Config(
+        api_base="https://api.anthropic.com/v1/messages",
+        api_key="test-key",
+        model="claude-3",
+        api_format="anthropic",
+    )
+    anthro_client = LLMClient(config)
+
+    mock_req = MagicMock()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 401
+    mock_resp.text = "Unauthorized"
+    error = httpx.HTTPStatusError("401", request=mock_req, response=mock_resp)
+
+    class _ErrorCtx:
+        async def __aenter__(self):
+            raise error
+        async def __aexit__(self, *_):
+            pass
+
+    anthro_client.client.stream = lambda *a, **kw: _ErrorCtx()
+    with pytest.raises(RuntimeError, match="HTTP 401"):
+        async for _ in anthro_client.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    await anthro_client.close()
+
+
+async def test_stream_chat_general_exception_raises_runtime_error(client):
+    """stream_chat (Responses format) wraps unexpected exceptions in RuntimeError."""
+    class _ErrorCtx:
+        async def __aenter__(self):
+            raise ConnectionError("network down")
+        async def __aexit__(self, *_):
+            pass
+
+    client.client.stream = lambda *a, **kw: _ErrorCtx()
+    with pytest.raises(RuntimeError, match="Stream request failed"):
+        async for _ in client.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    await client.close()
