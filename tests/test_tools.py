@@ -69,7 +69,7 @@ def test_tool_names():
 
 
 def test_all_tool_names_present():
-    """Verify all 15 tools are defined."""
+    """Verify all 17 tools are defined."""
     tools = get_tool_definitions()
     tool_names = {tool["function"]["name"] for tool in tools}
     expected = {
@@ -77,6 +77,8 @@ def test_all_tool_names_present():
         "write_file",
         "edit_file",
         "exec_command",
+        "glob_files",
+        "grep_files",
         "web_search",
         "web_fetch",
         "update_memory",
@@ -1040,3 +1042,270 @@ async def test_tool_executor_update_memory_error():
             assert "disk full" in result["error"]
         finally:
             os.chdir(old_cwd)
+
+
+# ── glob_files ──
+
+
+async def test_tool_executor_glob_files_basic():
+    """glob_files returns matching files."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        td = Path(temp_dir)
+        (td / "foo.py").write_text("x")
+        (td / "bar.py").write_text("x")
+        (td / "readme.md").write_text("x")
+
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "glob_files",
+                "arguments": json.dumps({"pattern": "**/*.py", "base_dir": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 2
+        assert all(m.endswith(".py") for m in result["matches"])
+
+
+async def test_tool_executor_glob_files_no_matches():
+    """glob_files returns empty list when pattern matches nothing."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "glob_files",
+                "arguments": json.dumps({"pattern": "**/*.rs", "base_dir": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 0
+        assert result["matches"] == []
+
+
+async def test_tool_executor_glob_files_skips_hidden_dirs():
+    """glob_files excludes results inside .git and node_modules."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        td = Path(temp_dir)
+        (td / "src").mkdir()
+        (td / "src" / "main.py").write_text("x")
+        (td / ".git").mkdir()
+        (td / ".git" / "config.py").write_text("x")  # should be excluded
+        (td / "node_modules").mkdir()
+        (td / "node_modules" / "dep.py").write_text("x")  # should be excluded
+
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "glob_files",
+                "arguments": json.dumps({"pattern": "**/*.py", "base_dir": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["matches"] == ["src/main.py"]
+
+
+async def test_tool_executor_glob_files_sandbox_blocked():
+    """glob_files returns error when base_dir is outside sandbox."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "glob_files",
+                "arguments": json.dumps({"pattern": "**/*.py", "base_dir": "/etc"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is False
+
+
+async def test_tool_executor_glob_files_default_base_dir():
+    """glob_files defaults to CWD when base_dir is omitted."""
+    import os
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        td = Path(temp_dir)
+        (td / "hello.py").write_text("x")
+        old_cwd = os.getcwd()
+        os.chdir(temp_dir)
+        try:
+            executor = ToolExecutor(Mock(), sandbox)
+            tool_call = {
+                "function": {
+                    "name": "glob_files",
+                    "arguments": json.dumps({"pattern": "*.py"}),
+                }
+            }
+            result = await executor.execute_tool(tool_call)
+            assert result["success"] is True
+            assert "hello.py" in result["matches"]
+        finally:
+            os.chdir(old_cwd)
+
+
+# ── grep_files ──
+
+
+async def test_tool_executor_grep_files_basic():
+    """grep_files returns matching lines with file and line number."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        td = Path(temp_dir)
+        (td / "a.py").write_text("def foo():\n    pass\n")
+        (td / "b.py").write_text("def bar():\n    return 1\n")
+
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({"pattern": "def foo", "path": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["matches"][0]["file"] == "a.py"
+        assert result["matches"][0]["line"] == 1
+        assert "def foo" in result["matches"][0]["text"]
+
+
+async def test_tool_executor_grep_files_no_matches():
+    """grep_files returns empty list when pattern not found."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        (Path(temp_dir) / "x.py").write_text("hello world\n")
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({"pattern": "zzznomatch", "path": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 0
+
+
+async def test_tool_executor_grep_files_case_insensitive():
+    """grep_files case_insensitive=True matches regardless of case."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        (Path(temp_dir) / "x.py").write_text("Hello World\n")
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({
+                    "pattern": "hello world",
+                    "path": temp_dir,
+                    "case_insensitive": True,
+                }),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 1
+
+
+async def test_tool_executor_grep_files_file_glob_filter():
+    """grep_files file_glob restricts search to matching filenames."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        td = Path(temp_dir)
+        (td / "code.py").write_text("import os\n")
+        (td / "notes.txt").write_text("import something\n")  # should be excluded
+
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({
+                    "pattern": "import",
+                    "path": temp_dir,
+                    "file_glob": "*.py",
+                }),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["matches"][0]["file"] == "code.py"
+
+
+async def test_tool_executor_grep_files_single_file():
+    """grep_files works when path is a single file."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        target = Path(temp_dir) / "target.py"
+        target.write_text("line one\nline two\nline three\n")
+
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({"pattern": "two", "path": str(target)}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["matches"][0]["line"] == 2
+
+
+async def test_tool_executor_grep_files_invalid_regex():
+    """grep_files returns error for invalid regex pattern."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({"pattern": "[unclosed", "path": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is False
+        assert "Invalid regex" in result["error"]
+
+
+async def test_tool_executor_grep_files_skips_binary():
+    """grep_files silently skips files that can't be decoded as UTF-8."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        td = Path(temp_dir)
+        (td / "binary.bin").write_bytes(b"\xff\xfe binary \x00\x01")
+        (td / "text.py").write_text("find me\n")
+
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({"pattern": "find me", "path": temp_dir}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["matches"][0]["file"] == "text.py"
+
+
+async def test_tool_executor_grep_files_sandbox_blocked():
+    """grep_files returns error when path is outside sandbox."""
+    with TemporaryDirectory() as temp_dir:
+        sandbox = _make_sandbox(temp_dir)
+        executor = ToolExecutor(Mock(), sandbox)
+        tool_call = {
+            "function": {
+                "name": "grep_files",
+                "arguments": json.dumps({"pattern": "root", "path": "/etc"}),
+            }
+        }
+        result = await executor.execute_tool(tool_call)
+        assert result["success"] is False

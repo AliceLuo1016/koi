@@ -85,6 +85,38 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
         {
             "type": "function",
             "function": {
+                "name": "glob_files",
+                "description": "Find files matching a glob pattern. Faster and safer than exec_command with find.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Glob pattern, e.g. '**/*.py' or 'src/**/*.ts'"},
+                        "base_dir": {"type": "string", "description": "Directory to search in (default: current directory)"}
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "grep_files",
+                "description": "Search file contents using a regex pattern. Returns matching lines with file path and line number.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "pattern": {"type": "string", "description": "Regex pattern to search for"},
+                        "path": {"type": "string", "description": "File or directory to search (default: current directory)"},
+                        "file_glob": {"type": "string", "description": "Filename filter, e.g. '*.py' or '*.ts'"},
+                        "case_insensitive": {"type": "boolean", "description": "Case-insensitive search (default: false)"}
+                    },
+                    "required": ["pattern"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
                 "name": "web_search",
                 "description": "Search the web using Brave Search API (placeholder - returns TODO)",
                 "parameters": {
@@ -272,6 +304,10 @@ class ToolExecutor:
                 return await self._edit_file(**arguments)
             elif function_name == "exec_command":
                 return await self._exec_command(**arguments)
+            elif function_name == "glob_files":
+                return await self._glob_files(**arguments)
+            elif function_name == "grep_files":
+                return await self._grep_files(**arguments)
             elif function_name == "web_search":
                 return await self._web_search(**arguments)
             elif function_name == "web_fetch":
@@ -489,6 +525,94 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "success": False}
     
+    _SKIP_DIRS = frozenset({
+        ".git", "node_modules", "__pycache__", ".venv", "venv",
+        ".tox", "dist", "build", ".mypy_cache", ".pytest_cache",
+    })
+
+    async def _glob_files(self, pattern: str, base_dir: Optional[str] = None) -> Dict[str, Any]:
+        """Find files matching a glob pattern."""
+        try:
+            base = Path(base_dir) if base_dir else Path.cwd()
+            allowed, reason = self.sandbox.check_read(str(base))
+            if not allowed:
+                return {"error": reason, "success": False}
+            if not base.is_dir():
+                return {"error": f"Not a directory: {base}", "success": False}
+
+            iterator = base.rglob(pattern) if "**" in pattern else base.glob(pattern)
+            matches = []
+            for p in sorted(iterator):
+                if any(part in self._SKIP_DIRS for part in p.parts):
+                    continue
+                matches.append(str(p.relative_to(base)))
+                if len(matches) >= 500:
+                    break
+
+            return {
+                "matches": matches,
+                "count": len(matches),
+                "truncated": len(matches) == 500,
+                "success": True,
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _grep_files(
+        self,
+        pattern: str,
+        path: Optional[str] = None,
+        file_glob: Optional[str] = None,
+        case_insensitive: bool = False,
+    ) -> Dict[str, Any]:
+        """Search file contents using a regex pattern."""
+        try:
+            base = Path(path) if path else Path.cwd()
+            allowed, reason = self.sandbox.check_read(str(base))
+            if not allowed:
+                return {"error": reason, "success": False}
+
+            flags = re.IGNORECASE if case_insensitive else 0
+            try:
+                compiled = re.compile(pattern, flags)
+            except re.error as e:
+                return {"error": f"Invalid regex: {e}", "success": False}
+
+            MAX_MATCHES = 200
+
+            def _candidate_files():
+                if base.is_file():
+                    yield base
+                else:
+                    glob_pat = file_glob or "*"
+                    for p in sorted(base.rglob(glob_pat)):
+                        if p.is_file() and not any(part in self._SKIP_DIRS for part in p.parts):
+                            yield p
+
+            matches = []
+            for file_path in _candidate_files():
+                if len(matches) >= MAX_MATCHES:
+                    break
+                try:
+                    text = file_path.read_text(encoding="utf-8", errors="strict")
+                except (UnicodeDecodeError, OSError):
+                    continue
+                rel = str(file_path.relative_to(base)) if not base.is_file() else str(file_path)
+                for lineno, line in enumerate(text.splitlines(), 1):
+                    if compiled.search(line):
+                        matches.append({"file": rel, "line": lineno, "text": line[:200]})
+                        if len(matches) >= MAX_MATCHES:
+                            break
+
+            return {
+                "matches": matches,
+                "count": len(matches),
+                "truncated": len(matches) == MAX_MATCHES,
+                "success": True,
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
     async def _web_search(self, query: str) -> Dict[str, Any]:
         """Placeholder for web search - returns TODO."""
         return {
