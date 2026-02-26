@@ -221,7 +221,7 @@ Include: what happened, why, and what to do instead next time.
 
 - In interactive sessions, always output results directly in the terminal. Do not use `create_alert` — just print the answer.
 - Only use `create_alert` when running as a cron job (non-interactive).
-- **Never write cron execution results to MEMORY.md.** Cron output is already captured in `.koi/cron-logs/`. Memory is for learnings, not logs.
+- **Never write operational history to MEMORY.md.** This includes: cron execution results, specific MR/issue numbers reviewed, cron job IDs, past actions taken, status snapshots ("X passed, Y failed"). These are logs, not learnings. Cron output goes to `.koi/cron-logs/`. Memory is for reusable context that makes future sessions more effective — not a record of what happened.
 
 ## Skills
 
