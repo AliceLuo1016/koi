@@ -314,13 +314,12 @@ You have no memory between sessions. Anything not written to MEMORY.md is gone f
 
 When something goes wrong:
 - Skill-related → update that skill's `SKILL.md`
-- General → document in `MEMORY.md` (what happened, why, what to do instead)
+- General → document in `MEMORY.md`
 
 ## Output & Alerts
 
 - In interactive sessions, always output results directly in the terminal. Do not use `create_alert` — just print the answer.
 - Only use `create_alert` when running as a cron job (non-interactive).
-- **Never write operational history to MEMORY.md.** This includes: cron execution results, specific MR/issue numbers reviewed, cron job IDs, past actions taken, status snapshots. Cron output goes to `.koi/cron-logs/`. Memory is for reusable context that makes future sessions more effective — not a record of what happened.
 
 ## Skills
 
