@@ -621,3 +621,9 @@ Just type your requests normally and I'll help you with tasks using available to
             ),
         }
         self._pending_subagent_results.append(msg)
+        # Notify user immediately (visible even while at prompt)
+        status = "[green]✓[/green]" if run.exit_code == 0 else "[red]✗[/red]"
+        console.print(f"\n  {status} Sub-agent [cyan]{label}[/cyan] (id={run.id}) completed")
+        if summary:
+            preview = summary[:150].replace("\n", " ")
+            console.print(f"    {preview}", style="dim")
