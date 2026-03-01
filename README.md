@@ -1,34 +1,25 @@
 # Koi 🐠
 
-Terminal-based AI agent with memory, tool calling, skills, sandbox security, and system cron integration. Built for developers who want a powerful AI assistant that lives in their terminal.
-
-## Documentation
-
-- [**Quick Start**](#quick-start) - Get up and running
-- [**Configuration Guide**](CONFIG_GUIDE.md) - Detailed configuration options
-- [**Developer Guide**](DEVELOPER.md) - Extend Koi with custom tools and skills
-- [**Architecture**](ARCHITECTURE.md) - System design and components
-- [**Troubleshooting**](TROUBLESHOOTING.md) - Common issues and solutions
-- [**Changelog**](CHANGELOG.md) - Version history and updates
-- [**Examples**](EXAMPLE.md) - Usage examples
-- [**Best Practices**](BEST-PRACTICES.md) - Tips and workflows
+Terminal-based AI agent with persistent memory, tool calling, extensible skills, sandbox security, and cron integration. Built for developers who want a powerful AI assistant in their terminal.
 
 ## Features
 
-- **Conversational AI**: Chat naturally with an AI agent that can think and use tools
-- **Tool Integration**: Read/write files, execute commands, fetch web content, and more
-- **Persistent Memory**: Remember important context between sessions
-- **Skills System**: Extensible capabilities through markdown-based skill definitions
-- **Alerts System**: Structured alerts with severity levels and desktop notifications
-- **Sandbox Security**: Credential protection, env scrubbing, and file access control
-- **Cron Integration**: Schedule AI tasks to run automatically
-- **Context Management**: Smart conversation compaction to stay within token limits
-- **Multi-line Input**: Escape+Enter for newlines, multi-line paste support via prompt_toolkit
-- **Rich Terminal UI**: Beautiful output with colored text
+- **Multi-Provider Support** — OpenAI Responses API, Chat Completions, and Anthropic Claude (auto-detected)
+- **Extended Thinking** — Native reasoning for Anthropic/OpenAI, `<think>` tag fallback for others
+- **Tool Calling** — File ops, shell commands, web fetch, memory, alerts, and more
+- **Persistent Memory** — Context that survives across sessions
+- **Skills System** — Markdown-based extensible capabilities
+- **Sandbox Security** — File access control, env scrubbing, command filtering
+- **Cron Integration** — Schedule AI tasks via system crontab
+- **Context Management** — 4-layer system: truncation → pruning → compaction → guard
+- **Prompt Caching** — ~90% input token savings on Anthropic
+- **Sub-Agents** — Spawn isolated child processes for parallel work
+- **Streaming** — Real-time token display for all API formats
+- **Rich Terminal UI** — Markdown rendering, multi-line input (Escape+Enter)
 
 ## Quick Start
 
-### Installation
+### Install
 
 ```bash
 cd ~/koi
@@ -42,14 +33,7 @@ cd your-project
 koi init
 ```
 
-This creates a `.koi/` directory with:
-- `config.json` — API settings and configuration
-- `sandbox.yaml` — Security sandbox rules
-- `MEMORY.md` — Persistent memory file
-- `AGENTS.md` — Project-specific instructions
-- `cron-logs/` — Directory for scheduled task logs
-
-### Configure API Access
+### Configure
 
 Edit `.koi/config.json`:
 
@@ -65,241 +49,148 @@ Edit `.koi/config.json`:
 }
 ```
 
-#### API Provider Support
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `api_base` | string | — | API endpoint URL (required) |
+| `api_key` | string | — | API key, or set `KOI_API_KEY` env var |
+| `model` | string | `openai/openai/gpt-5.2-codex` | Model identifier |
+| `api_format` | string | auto-detected | `responses`, `chat_completions`, or `anthropic` |
+| `max_tokens` | int | 4096 | Max tokens per response |
+| `context_window` | int | 128000 | Model's context window size |
+| `temperature` | float | model default | Sampling temperature (0–2) |
+| `skills_paths` | array | `[".koi/skills"]` | Directories to search for skills |
 
-Koi supports multiple AI providers:
+**Provider examples:**
 
-**OpenAI-compatible Responses API (Default):**
 ```json
-{
-  "api_base": "https://api.example.com/v1/responses",
-  "api_key": "your-api-key-here",
-  "model": "your-model-name",
-  "api_format": "responses"  // Optional, auto-detected
-}
+// Anthropic (auto-detected from model name containing "claude" or "anthropic")
+{ "api_base": "https://api.anthropic.com", "model": "claude-3-opus-20240229" }
+
+// Claude Code integration: if authenticated via `claude auth`, Koi uses ~/.claude.json automatically
 ```
 
-**Anthropic Claude API:**
-```json
-{
-  "api_base": "https://api.anthropic.com",
-  "api_key": "sk-ant-...",
-  "model": "claude-3-opus-20240229",
-  "api_format": "anthropic"  // Optional, auto-detected
-}
-```
-
-**Notes:**
-- The `api_format` is auto-detected from the model name. Models containing "anthropic" or "claude" automatically use the Anthropic format.
-- Set `KOI_API_KEY` as an environment variable to avoid storing keys in config files.
-- **Claude Code Integration**: If using Claude Code with `claude auth`, Koi automatically uses your API key from `~/.claude.json` for Anthropic models.
-
-### Start Chatting
+### Run
 
 ```bash
 koi run
+koi run --thinking high              # Enable extended thinking
+koi run --task "..." --non-interactive  # One-shot for scripts/cron
 ```
 
 ## Commands
 
-### CLI
+**CLI:**
 
 | Command | Description |
 |---------|-------------|
 | `koi init` | Initialize `.koi/` directory |
 | `koi run` | Start interactive session |
-| `koi run --task "..." --non-interactive` | Run a task and exit (for cron/scripts) |
-| `koi cron add "0 9 * * *" "Check emails"` | Schedule a recurring task |
-| `koi cron list` | List scheduled tasks |
-| `koi cron remove <id>` | Remove a scheduled task |
+| `koi cron add "schedule" "task"` | Schedule a recurring task |
+| `koi cron list` / `koi cron remove <id>` | Manage cron jobs |
 | `koi skills` | List available skills |
-| `koi config` | Show current configuration |
-| `koi memory` | Show current memory |
+| `koi config` | Show configuration |
+| `koi memory` | Show memory |
 
-### Chat Commands
+**Chat (during `koi run`):**
 
-During a `koi run` session:
-
-| Command | Description |
-|---------|-------------|
-| `/exit`, `/quit` | Exit the session |
-| `/help` | Show help |
-| `/memory` | Show current memory |
-| `/remember TEXT` | Add text to memory |
-| `/skills` | List available skills |
-| `/compact` | Force conversation compaction |
-| `/stats` | Show context usage statistics |
-
-**Input:** Enter submits, Escape+Enter inserts a newline. Multi-line paste is supported.
+`/help` · `/exit` · `/memory` · `/remember TEXT` · `/skills` · `/compact` · `/stats`
 
 ## Tools
 
 | Tool | Description |
 |------|-------------|
-| `read_file` | Read file contents (with offset/limit) |
+| `read_file` | Read files (with offset/limit for large files) |
 | `write_file` | Create or overwrite files |
-| `edit_file` | Surgical find-and-replace edits |
+| `edit_file` | Surgical find-and-replace |
 | `exec_command` | Execute shell commands (sandboxed) |
-| `web_fetch` | Fetch and convert web pages to markdown |
-| `web_search` | Web search (placeholder — TODO) |
+| `glob_files` | Find files by pattern |
+| `grep_files` | Search file contents |
+| `web_fetch` | Fetch web pages as markdown |
 | `update_memory` | Persist info across sessions |
-| `read_skill` | Load skill definitions by name |
-| `create_alert` | Create structured alerts with desktop notifications |
-| `list_alerts` | List alerts filtered by status |
-| `resolve_alert` | Approve or dismiss alerts |
+| `read_skill` | Load skill definitions |
+| `create_alert` / `list_alerts` / `resolve_alert` | Structured alert management |
+| `spawn_subagent` / `list_subagents` / `kill_subagent` | Sub-agent orchestration |
 
 ## Sandbox Security
 
-Koi includes a sandbox that prevents accidental credential leaks and destructive actions. Configuration lives in `.koi/sandbox.yaml` and is loaded automatically on every run.
+Three layers of protection configured in `.koi/sandbox.yaml`:
 
-### Three Layers of Protection
+1. **File Access Control** — Allowed/blocked path lists. Blocks `~/.aws`, `~/.ssh`, `~/.config` by default.
+2. **Environment Scrubbing** — Only allowlisted env vars passed to commands. API keys and tokens stripped.
+3. **Command Filtering** — Dangerous commands blocked (`rm -rf /`, `DROP TABLE`). Risky commands require confirmation.
 
-**1. File Access Control**
+## Skills
 
-```yaml
-filesystem:
-  allowed_paths:
-    - "."              # Only the project directory
-  blocked_paths:
-    - "~/.aws"         # AWS credentials
-    - "~/.ssh"         # SSH keys
-    - "~/.config"      # App configs & tokens
-```
+Markdown-based skill files in `.koi/skills/<name>/SKILL.md`. Discovered automatically from `skills_paths` and loaded on demand.
 
-File reads/writes outside allowed paths are denied. Blocked paths are denied even if you expand allowed paths later.
+**Creating skills:** Use the built-in `skill-creator` tool — walk Koi through your workflow, then ask it to package it as a skill.
 
-**2. Environment Scrubbing**
+## Memory & Context
 
-```yaml
-environment:
-  allowlist:
-    - PATH
-    - HOME
-    - USER
-    - SHELL
-    - LANG
-    - TERM
-    # ... safe vars only
-```
+- **MEMORY.md** — Long-term memory persisted to disk
+- **Context compaction** — Auto-summarizes at 60% context usage (with 120s safety timeout)
+- **Pruning** — Soft trim at 30%, hard clear at 50%
+- **Context guard** — Pre-call safety net caps individual tool results (50% window) and total context (75% window)
+- **Prompt caching** — System prompt + last tool result cached on Anthropic (~90% savings)
 
-Shell commands only receive allowlisted environment variables. API keys, cloud credentials, and tokens are stripped — so even `echo $OPENAI_API_KEY` returns nothing.
-
-**3. Command Blocking**
-
-```yaml
-commands:
-  blocked_patterns:
-    - 'rm\s+-rf\s+/'          # Nuke from orbit
-    - 'DROP\s+TABLE'           # SQL destruction
-    - 'aws\s+iam'              # IAM changes
-  confirm_patterns:
-    - 'rm\s+'                  # Needs confirmation
-    - 'git\s+push\s+.*--force' # Force push
-```
-
-Dangerous commands are hard-blocked. Risky commands are flagged for user confirmation.
-
-### Customization
-
-Edit `.koi/sandbox.yaml` to adjust rules for your project. The defaults are secure but not overly restrictive.
-
-## Alerts System
-
-Koi can create, track, and resolve structured alerts — useful for monitoring tasks.
-
-```
-koi> Read the logs and create alerts for any errors
-🔧 read_file mock/logs/latest.log
-🔧 create_alert "DB pool overloaded" severity=critical
-🔧 create_alert "Auth retry storm" severity=high
-```
-
-Alerts are saved as markdown files in `.koi/alerts/` and trigger desktop notifications (macOS/Linux). On startup, koi shows a count of pending alerts so nothing gets missed.
-
-### Alert Workflow
-
-1. **Create** — Koi detects issues and creates alerts with severity + proposed fix
-2. **Review** — `list_alerts` shows pending alerts
-3. **Resolve** — `resolve_alert` approves or dismisses; approved alerts return their fix command
-
-## Skills System
-
-Skills are markdown files that teach koi how to handle specific tasks:
-
-```
-skills/
-└── log-monitor/
-    └── SKILL.md
-```
-
-Skills are discovered from paths in `config.skills_paths` and listed in the system prompt. The agent loads full skill content on demand via `read_skill`.
-
-## Memory System
-
-- **MEMORY.md** — Long-term memory that persists between sessions
-- **Context Compaction** — When conversations get long, koi summarizes older messages to stay within the context window
-- **`/remember`** — Quick way to save important info during a session
-- **`update_memory`** — Tool the agent can use proactively
-
-## Cron Integration
-
-Schedule AI tasks to run automatically via system crontab:
+## Cron
 
 ```bash
-# Check logs every hour
-koi cron add "0 * * * *" "Read mock/logs/latest.log and create alerts for errors"
-
-# Daily standup
+koi cron add "0 * * * *" "Read logs and create alerts for errors"
 koi cron add "0 9 * * 1-5" "Review yesterday's commits and plan today"
 ```
 
-Cron jobs use the full path to `koi` (resolved via `shutil.which`) so they work correctly in cron's minimal environment. Output goes to `.koi/cron-logs/`.
+Output goes to `.koi/cron-logs/`. Full `koi` path is resolved automatically for cron's minimal environment.
 
 ## Architecture
 
 ```
 src/koi/
-├── __main__.py      # Entry point
-├── cli.py           # CLI commands (init, run, cron, etc.)
-├── agent.py         # Main conversation loop
-├── llm.py           # OpenAI-compatible Responses API client
-├── tools.py         # Tool definitions and execution
-├── sandbox.py       # Security sandbox enforcement
-├── memory.py        # Persistent memory
+├── cli.py           # Click CLI (init, run, cron, skills, config, memory)
+├── agent.py         # Async conversation loop + tool execution
+├── llm.py           # Multi-provider LLM client (Responses/Chat Completions/Anthropic)
+├── tools.py         # Tool definitions + sandboxed executor
+├── sandbox.py       # 3-layer security enforcement
+├── memory.py        # Persistent memory via .koi/MEMORY.md
 ├── skills.py        # Skill discovery and loading
-├── cron.py          # System crontab integration
 ├── config.py        # Configuration management
-├── compaction.py    # Context window management
-└── prompts.py       # System prompt building
+├── compaction.py    # Context compaction via LLM summarization
+├── context_guard.py # Pre-call context window safety net
+├── context_pruning.py # Two-phase message pruning
+├── subagent.py      # Sub-agent spawning and orchestration
+├── usage.py         # Token usage tracking
+├── prompts.py       # System prompt assembly (12 structured sections)
+└── cron.py          # System crontab management
 ```
 
-### Per-Project Structure
-
-```
-your-project/
-├── .koi/
-│   ├── config.json      # API settings
-│   ├── sandbox.yaml     # Security rules
-│   ├── MEMORY.md        # Persistent memory
-│   ├── AGENTS.md        # Project instructions
-│   ├── alerts/          # Alert files
-│   ├── crontab.json     # Cron job metadata
-│   ├── skills/          # Skills (bundled + custom)
-│   └── cron-logs/       # Scheduled task logs
-└── ...
-```
+**Key patterns:**
+- Async throughout (agent loop, tool execution, LLM calls)
+- Internal message format is OpenAI Chat Completions dicts, converted at the LLM boundary
+- Sandbox consulted before every file read/write and command execution
 
 ## Development
 
 ```bash
-# Install with dev dependencies
-pip install ".[dev]"
-
-# Run tests
-pytest tests/
-
-# Format & lint
-black src/ tests/
-ruff check src/ tests/
+pip install ".[dev]"          # Install with dev deps
+pytest tests/ -v              # Run tests (494 tests, 0 failures)
+black src/ tests/             # Format (line-length 88, target py39)
+ruff check src/ tests/        # Lint (rules: E, F, W, I, N, UP)
 ```
 
+Uses **uv** as package manager, **hatchling** as build backend. Python 3.9+. Async tests use `pytest-asyncio` with `asyncio_mode = "auto"`.
+
+## Example Workflows
+
+- **Batch-analyze failed jobs** — Scan logs across N failed jobs, summarize common failures with fixes
+- **Automated cluster monitoring** — Cron jobs to watch utilization and auto-submit work
+- **Custom skills** — Walk Koi through your workflow step by step, then package it with skill-creator
+
+## Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| `koi: command not found` | `pip install .` and ensure PATH includes pip's bin dir |
+| API key not found | Set `KOI_API_KEY` env var, or add to `.koi/config.json`, or run `claude auth` for Anthropic |
+| Context window exceeded | Use `/compact`, reduce `context_window`, or start a fresh session |
+| Sandbox blocks file/command | Edit `.koi/sandbox.yaml` to adjust allowed paths or command patterns |
+| Cron jobs not running | Check `crontab -l | grep koi` and logs in `.koi/cron-logs/` |
