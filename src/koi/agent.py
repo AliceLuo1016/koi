@@ -629,3 +629,7 @@ Just type your requests normally and I'll help you with tasks using available to
                 line = line.strip()
                 if line:
                     console.print(f"    {line}", style="dim")
+        
+        # Reprint prompt so user knows they can type
+        console.file.write("koi> ")
+        console.file.flush()
