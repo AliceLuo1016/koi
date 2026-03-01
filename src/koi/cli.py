@@ -380,9 +380,105 @@ commands:
     - 'git\\s+push\\s+.*--force'
 """)
     else:
-        # Existing .koi — ensure subdirs exist (safe to re-create)
+        # Existing .koi — ensure subdirs and essential files exist
         koi_dir.mkdir(exist_ok=True)
         (koi_dir / "cron-logs").mkdir(exist_ok=True)
+
+        # Ensure skills are copied if missing
+        skills_dir = koi_dir / "skills"
+        bundled_skills_dir = Path(__file__).parent / "bundled_skills"
+        if bundled_skills_dir.exists():
+            if not skills_dir.exists():
+                shutil.copytree(bundled_skills_dir, skills_dir)
+                init_file = skills_dir / "__init__.py"
+                if init_file.exists():
+                    init_file.unlink()
+            else:
+                for skill in bundled_skills_dir.iterdir():
+                    if skill.is_dir() and not (skills_dir / skill.name).exists():
+                        shutil.copytree(skill, skills_dir / skill.name)
+
+        # Ensure AGENTS.md exists
+        agents_path = koi_dir / "AGENTS.md"
+        if not agents_path.exists():
+            with open(agents_path, "w") as f:
+                f.write("""# Project Instructions
+
+You are **Koi** — a terminal-based AI agent that lives in the user's project directory.
+
+## Session Startup
+
+Every session begins the same way — before responding to the user:
+
+1. Read `.koi/MEMORY.md` to recall what you already know about this project.
+2. Check `.koi/alerts/` for any pending alerts.
+3. Then proceed with the user's request.
+
+Do not ask permission. Do not skip this. Your memory resets between sessions — MEMORY.md is the only thing that survives.
+
+## Core Behavior
+
+- Learn from execution history to minimize tool/command invocations and prefer the shortest safe path to achieve the goal.
+- When repeated steps or errors are observed, update the relevant skill(s) or memory to encode the more efficient path.
+- If a faster workflow becomes the default, apply it directly in future runs without re-trying known failing actions.
+
+## Memory Discipline
+
+You have no memory between sessions. Anything not written to MEMORY.md is gone forever.
+
+**Where to store learnings:**
+
+- **Skill-specific** → Update the skill's `SKILL.md` directly.
+- **General** → Write to `MEMORY.md`.
+
+## Skills
+
+All skills live in `.koi/skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.
+""")
+
+        # Ensure sandbox.yaml exists
+        sandbox_path = koi_dir / "sandbox.yaml"
+        if not sandbox_path.exists():
+            with open(sandbox_path, "w") as f:
+                f.write("""# Sandbox Security Configuration
+filesystem:
+  allowed_paths:
+    - "."
+  readonly_paths:
+    - "/usr/local"
+    - "/opt/homebrew"
+  blocked_paths:
+    - "~/.aws"
+    - "~/.ssh"
+    - "~/.config"
+environment:
+  allowlist:
+    - PATH
+    - HOME
+    - USER
+    - SHELL
+    - LANG
+    - LC_ALL
+    - TERM
+    - EDITOR
+    - TMPDIR
+    - PYTHONPATH
+    - VIRTUAL_ENV
+    - NODE_PATH
+    - SSH_AUTH_SOCK
+    - SSH_AGENT_PID
+commands:
+  blocked_patterns:
+    - 'rm\\s+-rf\\s+/'
+    - 'sudo\\s+rm\\s+-rf'
+    - 'mkfs\\.'
+    - 'dd\\s+if=.*of=/dev/'
+    - 'DROP\\s+TABLE'
+    - 'DROP\\s+DATABASE'
+  confirm_patterns:
+    - 'rm\\s+'
+    - 'git\\s+push\\s+.*--force'
+""")
 
         # Update config with new wizard selections
         config_path = koi_dir / "config.json"
