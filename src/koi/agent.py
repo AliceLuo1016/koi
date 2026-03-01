@@ -10,7 +10,9 @@ from rich.console import Console
 from rich.text import Text
 from rich.markdown import Markdown
 from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.styles import Style as PtStyle
 
 from .config import Config
 from .llm import LLMClient
@@ -107,7 +109,11 @@ class Agent:
             def _(event):
                 event.current_buffer.newline()
 
-            self._prompt_session = PromptSession(key_bindings=bindings, multiline=True)
+            self._prompt_style = PtStyle.from_dict({
+                'prompt': '#6cb6ff bold',     # soft blue prompt
+                '': '#e0e0e0',                # light gray user text
+            })
+            self._prompt_session = PromptSession(key_bindings=bindings, multiline=True, style=self._prompt_style)
 
         self._pending_subagent_results: List[Dict[str, Any]] = []
 
@@ -135,7 +141,7 @@ class Agent:
             while self.running:
                 # Get user input
                 try:
-                    user_input = (await self._prompt_session.prompt_async("koi> ")).strip()
+                    user_input = (await self._prompt_session.prompt_async(HTML('<prompt>koi&gt; </prompt>'))).strip()
                 except KeyboardInterrupt:
                     console.print("\n👋 Goodbye!", style="yellow")
                     break
