@@ -154,7 +154,7 @@ class Agent:
                     continue
 
                 # Handle special commands (but not file paths like /home/...)
-                _COMMANDS = {'exit', 'quit', 'help', 'memory', 'remember', 'compact', 'skills', 'status', 'stats', 'usage', 'new', 'reset'}
+                _COMMANDS = {'exit', 'quit', 'help', 'memory', 'remember', 'compact', 'skills', 'status', 'stats', 'usage', 'new'}
                 if user_input.startswith('/'):
                     cmd_word = user_input.split()[0][1:].lower()  # e.g. '/exit' -> 'exit'
                     if cmd_word in _COMMANDS:
@@ -460,7 +460,7 @@ class Agent:
         elif cmd == '/usage':
             console.print(self.llm_client.usage.summary(self.config.model))
 
-        elif cmd == '/new' or cmd == '/reset':
+        elif cmd == '/new':
             self.messages.clear()
             self.compactor.compaction_count = 0
             console.print("🆕 New session started. Context cleared.", style="green")
@@ -520,7 +520,7 @@ class Agent:
 - /status         - Show status card (model, tokens, cache, context)
 - /stats          - Alias for /status
 - /usage          - Show detailed token usage and estimated cost
-- /new, /reset    - Start a new session (clear context)
+- /new             - Start a new session (clear context)
 
 [cyan]Usage:[/cyan]
 Just type your requests normally and I'll help you with tasks using available tools.
