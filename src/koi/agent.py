@@ -469,8 +469,73 @@ class Agent:
             console.print(f"Unknown command: {command}", style="red")
     
     def _print_session_header(self):
-        """Print a bordered session header card."""
+        """Print animated fish splash then bordered session header card."""
         import os
+        import time
+        import shutil
+
+        # ── Fish swim animation ──
+        fish_frames = [
+            "       ><(((º>",
+            "      ><(((º>",
+            "     ><(((º>",
+            "    ><(((º>",
+            "   ><(((º>",
+            "  ><(((º>",
+            " ><(((º>",
+            "><(((º>",
+        ]
+        # Larger fish with bubbles for the final "splash"
+        splash = [
+            "",
+            "       [cyan]·  ˚[/cyan]",
+            "    [cyan]˚    ·[/cyan]",
+            "  [bold cyan]><(((bg_fishº>[/bold cyan]   [cyan]˚[/cyan]",
+            "    [cyan]·  ˚[/cyan]",
+            "",
+        ]
+
+        term_width = shutil.get_terminal_size().columns
+        fish_width = 14  # len of "><(((º>") with padding
+
+        try:
+            # Phase 1: Fish swims from right to center
+            num_steps = 12
+            start_col = term_width - fish_width - 2
+            end_col = (term_width - fish_width) // 2
+            step_size = max(1, (start_col - end_col) // num_steps)
+
+            for i in range(num_steps + 1):
+                col = start_col - (i * step_size)
+                if col < end_col:
+                    col = end_col
+                # Move cursor: clear line, print fish at position
+                line = " " * col + "\033[36m><(((º>\033[0m"
+                console.file.write(f"\r{line}\033[K")
+                console.file.flush()
+                time.sleep(0.05)
+
+            # Phase 2: Splash - replace with bigger fish + bubbles
+            # Move up and clear
+            console.file.write("\r\033[K")
+            console.file.flush()
+            time.sleep(0.1)
+
+            for line in splash:
+                if "bg_fish" in line:
+                    line = line.replace("bg_fish", "")
+                console.print(line)
+            time.sleep(0.3)
+
+            # Clear splash (move up and clear each line)
+            for _ in splash:
+                console.file.write("\033[A\033[K")
+            console.file.flush()
+
+        except Exception:
+            pass  # Skip animation on any terminal issue
+
+        # ── Session header card ──
         model = self.config.model
         cwd = os.getcwd()
         home = os.path.expanduser("~")
@@ -478,10 +543,9 @@ class Agent:
             cwd = "~" + cwd[len(home):]
         skills_count = len(self.skills_manager.list_skills())
 
-        # Build content lines
         lines = [
             ("", ""),
-            ("🐠", " [bold cyan]Koi[/bold cyan]"),
+            ("  [bold cyan]><(((º>[/bold cyan]", "  [bold cyan]Koi[/bold cyan]"),
             ("", ""),
             ("  model:", f"   {model}"),
             ("  dir:", f"     {cwd}"),
@@ -489,24 +553,20 @@ class Agent:
             ("", ""),
         ]
 
-        # Calculate box width from longest line
         from rich.text import Text as RichText
         max_width = 0
         for label, value in lines:
-            plain = label + value
-            # Strip rich markup for width calc
-            t = RichText.from_markup(plain)
+            t = RichText.from_markup(label + value)
             if len(t) > max_width:
                 max_width = len(t)
         max_width = max(max_width, 30)
-        box_width = max_width + 4  # 2 padding + 2 border
+        box_width = max_width + 4
 
         console.print(f"  [dim]╭{'─' * (box_width - 2)}╮[/dim]")
         for label, value in lines:
-            plain = label + value
-            t = RichText.from_markup(plain)
+            t = RichText.from_markup(label + value)
             padding = max_width - len(t)
-            console.print(f"  [dim]│[/dim] {plain}{' ' * padding} [dim]│[/dim]")
+            console.print(f"  [dim]│[/dim] {label}{value}{' ' * padding} [dim]│[/dim]")
         console.print(f"  [dim]╰{'─' * (box_width - 2)}╯[/dim]")
 
     def _show_help(self):
