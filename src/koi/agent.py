@@ -483,9 +483,9 @@ class Agent:
             ("", ""),
             ("🐠", " [bold cyan]Koi[/bold cyan]"),
             ("", ""),
-            ("  model:", f"   {model}"),
-            ("  dir:", f"     {cwd}"),
-            ("  skills:", f"  {skills_count} loaded"),
+            ("  model:  ", f" {model}"),
+            ("  dir:    ", f" {cwd}"),
+            ("  skills: ", f" {skills_count} loaded"),
             ("", ""),
         ]
 
