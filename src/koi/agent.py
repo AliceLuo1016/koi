@@ -134,8 +134,9 @@ class Agent:
         # 2. task.cancel() fires immediately from the main thread
         prev_handler = signal.signal(signal.SIGINT, self._handle_sigint)
 
-        console.print("🐠 [bold cyan]Koi Agent[/bold cyan] - Ready to help!", style="bold")
-        console.print("Type '/exit' to quit, '/help' for commands, Option+Enter (Alt+Enter) for newline\n")
+        self._print_session_header()
+        console.print("  Type [dim]/help[/dim] for commands, [dim]/exit[/dim] to quit, [dim]Alt+Enter[/dim] for newline")
+        console.print()
 
         try:
             while self.running:
@@ -467,6 +468,47 @@ class Agent:
         else:
             console.print(f"Unknown command: {command}", style="red")
     
+    def _print_session_header(self):
+        """Print a bordered session header card."""
+        import os
+        model = self.config.model
+        cwd = os.getcwd()
+        home = os.path.expanduser("~")
+        if cwd.startswith(home):
+            cwd = "~" + cwd[len(home):]
+        skills_count = len(self.skills_manager.list_skills())
+
+        # Build content lines
+        lines = [
+            ("", ""),
+            ("🐠", " [bold cyan]Koi[/bold cyan]"),
+            ("", ""),
+            ("  model:", f"   {model}"),
+            ("  dir:", f"     {cwd}"),
+            ("  skills:", f"  {skills_count} loaded"),
+            ("", ""),
+        ]
+
+        # Calculate box width from longest line
+        from rich.text import Text as RichText
+        max_width = 0
+        for label, value in lines:
+            plain = label + value
+            # Strip rich markup for width calc
+            t = RichText.from_markup(plain)
+            if len(t) > max_width:
+                max_width = len(t)
+        max_width = max(max_width, 30)
+        box_width = max_width + 4  # 2 padding + 2 border
+
+        console.print(f"  [dim]╭{'─' * (box_width - 2)}╮[/dim]")
+        for label, value in lines:
+            plain = label + value
+            t = RichText.from_markup(plain)
+            padding = max_width - len(t)
+            console.print(f"  [dim]│[/dim] {plain}{' ' * padding} [dim]│[/dim]")
+        console.print(f"  [dim]╰{'─' * (box_width - 2)}╯[/dim]")
+
     def _show_help(self):
         """Show help information."""
         help_text = """[bold blue]Koi Agent Commands:[/bold blue]
