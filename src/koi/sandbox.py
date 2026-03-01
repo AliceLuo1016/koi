@@ -32,8 +32,6 @@ class Sandbox:
         self.readonly_paths = [self._resolve(p) for p in fs.get("readonly_paths", [])]
         self.blocked_paths = [self._resolve(p) for p in fs.get("blocked_paths", [])]
         
-        creds = fs.get("credentials_path", ".koi/credentials")
-        self.credentials_path = self._resolve(creds)
 
         self.env_allowlist = set(env.get("allowlist", ["PATH", "HOME", "USER", "SHELL", "LANG", "TERM", "SSH_AUTH_SOCK", "SSH_AGENT_PID"]))
 
@@ -97,51 +95,8 @@ class Sandbox:
     # ── Environment sandboxing ──
 
     def get_safe_env(self) -> Dict[str, str]:
-        """Return a sanitized copy of os.environ with only allowlisted vars,
-        plus any credentials from the credentials folder."""
+        """Return a sanitized copy of os.environ with only allowlisted vars."""
         env = {k: v for k, v in os.environ.items() if k in self.env_allowlist}
-        env.update(self.get_credentials_env())
-        return env
-
-    # ── Credentials ──
-
-    def get_credential(self, name: str) -> Optional[str]:
-        """Read a credential by name from the credentials folder.
-        
-        E.g. get_credential("openai") reads .koi/credentials/openai
-        Looks for files with or without common extensions (.key, .token, .secret, .txt).
-        """
-        for suffix in ["", ".key", ".token", ".secret", ".txt"]:
-            path = self.credentials_path / f"{name}{suffix}"
-            if path.is_file():
-                return path.read_text().strip()
-        return None
-
-    def list_credentials(self) -> List[str]:
-        """List available credential names (without extensions)."""
-        if not self.credentials_path.is_dir():
-            return []
-        names = set()
-        for f in self.credentials_path.iterdir():
-            if f.is_file() and not f.name.startswith("."):
-                # Strip common extensions to get the base name
-                name = f.stem if f.suffix in (".key", ".token", ".secret", ".txt") else f.name
-                names.add(name)
-        return sorted(names)
-
-    def get_credentials_env(self) -> Dict[str, str]:
-        """Load all credentials as env vars (NAME → value).
-        
-        File .koi/credentials/openai.key → env var OPENAI_KEY=<contents>
-        """
-        env = {}
-        if not self.credentials_path.is_dir():
-            return env
-        for f in self.credentials_path.iterdir():
-            if f.is_file() and not f.name.startswith("."):
-                var_name = f.stem.upper() if f.suffix in (".key", ".token", ".secret", ".txt") else f.name.upper()
-                var_name = var_name.replace("-", "_").replace(".", "_")
-                env[var_name] = f.read_text().strip()
         return env
 
     # ── Command checks ──

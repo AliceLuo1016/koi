@@ -242,7 +242,6 @@ def init(force: bool):
     if not existing or force:
         koi_dir.mkdir(exist_ok=True)
         (koi_dir / "cron-logs").mkdir(exist_ok=True)
-        (koi_dir / "credentials").mkdir(exist_ok=True)
 
         # Copy bundled skills into .koi/skills/
         skills_dir = koi_dir / "skills"
@@ -384,7 +383,6 @@ commands:
         # Existing .koi — ensure subdirs exist (safe to re-create)
         koi_dir.mkdir(exist_ok=True)
         (koi_dir / "cron-logs").mkdir(exist_ok=True)
-        (koi_dir / "credentials").mkdir(exist_ok=True)
 
         # Update config with new wizard selections
         config_path = koi_dir / "config.json"
