@@ -60,15 +60,6 @@ Edit `.koi/config.json`:
 | `temperature` | float | model default | Sampling temperature (0–2) |
 | `skills_paths` | array | `[".koi/skills"]` | Directories to search for skills |
 
-**Provider examples:**
-
-```json
-// Anthropic (auto-detected from model name containing "claude" or "anthropic")
-{ "api_base": "https://api.anthropic.com", "model": "claude-3-opus-20240229" }
-
-// Claude Code integration: if authenticated via `claude auth`, Koi uses ~/.claude.json automatically
-```
-
 ### Run
 
 ```bash
