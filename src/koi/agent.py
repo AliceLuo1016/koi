@@ -458,7 +458,14 @@ class Agent:
             self._show_status()
 
         elif cmd == '/usage':
+            # Current session usage
             console.print(self.llm_client.usage.summary(self.config.model))
+            console.print()  # Empty line
+            
+            # 7-day history from usage log
+            from .usage import get_usage_history
+            history = get_usage_history(Path('.koi'), days=7)
+            console.print(history)
 
         elif cmd == '/new':
             self.messages.clear()
