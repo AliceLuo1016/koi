@@ -69,7 +69,7 @@ def test_tool_names():
 
 
 def test_all_tool_names_present():
-    """Verify all 17 tools are defined."""
+    """Verify all 20 tools are defined."""
     tools = get_tool_definitions()
     tool_names = {tool["function"]["name"] for tool in tools}
     expected = {
@@ -90,6 +90,9 @@ def test_all_tool_names_present():
         "create_alert",
         "list_alerts",
         "resolve_alert",
+        "spawn_subagent",
+        "list_subagents",
+        "kill_subagent",
     }
     assert tool_names == expected
 
@@ -158,7 +161,8 @@ async def test_tool_executor_read_file_with_offset_limit():
 
         result = await executor.execute_tool(tool_call)
         assert result["success"] is True
-        assert result["content"] == "b\nc\n"
+        assert result["content"].startswith("b\nc\n")
+        assert "output truncated" in result["content"]
         assert result["lines_read"] == 2
 
 

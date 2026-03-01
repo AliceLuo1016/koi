@@ -2,8 +2,10 @@
 
 import asyncio
 import json
+import re
 import signal
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
 from rich.console import Console
 from rich.text import Text
 from rich.markdown import Markdown
@@ -15,11 +17,58 @@ from .llm import LLMClient
 from .memory import Memory
 from .skills import SkillsManager
 from .sandbox import Sandbox
+from .subagent import SubagentManager
 from .tools import ToolExecutor, get_tool_definitions
 from .prompts import build_system_prompt, build_tool_result_message
 from .compaction import ContextCompactor
+from .context_pruning import prune_context
+from .context_guard import enforce_context_budget
+from .usage import log_usage, estimate_cost
 
 console = Console()
+
+
+def _fmt_num(n: int) -> str:
+    """Format a number with human-friendly suffixes (k, M)."""
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M"
+    if n >= 1_000:
+        return f"{n / 1_000:.1f}k"
+    return str(n)
+
+
+def strip_thinking_tags(text: str) -> Tuple[str, str]:
+    """Strip <think>...</think> blocks and extract <final>...</final> content.
+
+    Returns (visible_text, thinking_text) where:
+    - visible_text: content to display to the user
+    - thinking_text: concatenated content from all <think> blocks
+
+    Logic:
+    - Collect all <think>...</think> content into thinking_text
+    - If <final>...</final> blocks exist, visible_text is their content
+    - Otherwise, visible_text is everything outside <think> blocks
+    """
+    if not text:
+        return ("", "")
+
+    # Extract all <think>...</think> blocks (non-greedy, dotall)
+    think_pattern = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+    think_matches = think_pattern.findall(text)
+    thinking_text = "\n".join(m.strip() for m in think_matches if m.strip())
+
+    # Extract all <final>...</final> blocks
+    final_pattern = re.compile(r"<final>(.*?)</final>", re.DOTALL)
+    final_matches = final_pattern.findall(text)
+
+    if final_matches:
+        # Use only <final> content
+        visible_text = "\n".join(m.strip() for m in final_matches if m.strip())
+    else:
+        # No <final> tags — strip <think> blocks and show the rest
+        visible_text = think_pattern.sub("", text).strip()
+
+    return (visible_text, thinking_text)
 
 
 class Agent:
@@ -32,7 +81,11 @@ class Agent:
         self.memory = Memory()
         self.skills_manager = SkillsManager(config.skills_paths)
         self.sandbox = Sandbox()
-        self.tool_executor = ToolExecutor(self.skills_manager, self.sandbox)
+        self.subagent_manager = SubagentManager(config)
+        self.subagent_manager._on_complete = self._on_subagent_complete
+        self.tool_executor = ToolExecutor(
+            self.skills_manager, self.sandbox, self.subagent_manager
+        )
         self.compactor = ContextCompactor(self.llm_client, config.context_window)
 
         self.messages: List[Dict[str, Any]] = []
@@ -56,12 +109,15 @@ class Agent:
 
             self._prompt_session = PromptSession(key_bindings=bindings, multiline=True)
 
-        # Initialize with system prompt
-        system_prompt = build_system_prompt(config, non_interactive=non_interactive)
-        self.messages.append({
-            "role": "system",
-            "content": system_prompt
-        })
+        self._pending_subagent_results: List[Dict[str, Any]] = []
+
+        # System prompt stored separately — never in the messages array.
+        # Injected into the API payload at call time by LLMClient.
+        self.system_prompt = build_system_prompt(
+            config,
+            non_interactive=non_interactive,
+            use_reasoning_tags=self.llm_client.use_reasoning_tags,
+        )
     
     async def run_interactive(self):
         """Run interactive agent session."""
@@ -119,6 +175,10 @@ class Agent:
 
         finally:
             signal.signal(signal.SIGINT, prev_handler)
+            if self.llm_client.usage.total_requests > 0:
+                console.print()
+                console.print(self.llm_client.usage.summary(self.config.model), style="dim")
+                log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
             await self.llm_client.close()
     
     async def run_task(self, task: str, non_interactive: bool = False):
@@ -156,8 +216,10 @@ class Agent:
                 self._current_task = None
 
         finally:
+            if self.llm_client.usage.total_requests > 0:
+                log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
             await self.llm_client.close()
-    
+
     async def _agent_loop(self, non_interactive: bool = False):
         """Main agent thinking loop."""
         tools = get_tool_definitions()
@@ -172,22 +234,38 @@ class Agent:
             # messages are rolled back (preserving completed iterations).
             self._iter_msg_snapshot = len(self.messages)
 
+            # Inject pending sub-agent completion results
+            if self._pending_subagent_results:
+                self.messages.extend(self._pending_subagent_results)
+                self._pending_subagent_results.clear()
+
+            # Preemptive context pruning: trim/clear old tool results
+            self.messages = prune_context(
+                self.messages, self.config.context_window
+            )
+
             # Check if compaction is needed
             if self.compactor.needs_compaction(self.messages):
                 if not non_interactive:
                     console.print("🔄 Compacting conversation history...", style="yellow")
                 
                 self.messages = await self.compactor.compact_messages(self.messages)
-            
+
+            # Final context window guard before LLM call
+            self.messages = enforce_context_budget(
+                self.messages, self.config.context_window
+            )
+
             # Get response from LLM
             try:
                 if non_interactive:
                     # Non-interactive mode for cron jobs
-                    response = await self.llm_client.chat(self.messages, tools=tools)
+                    response = await self.llm_client.chat(
+                        self.messages, tools=tools, system_prompt=self.system_prompt
+                    )
                 else:
-                    # Interactive mode with spinner
-                    with console.status("Thinking...", spinner="dots"):
-                        response = await self._stream_response(self.messages, tools)
+                    # Interactive mode with streaming display
+                    response = await self._stream_response(self.messages, tools)
                 
                 if not response.get("choices"):
                     console.print("❌ No response from LLM", style="red")
@@ -258,23 +336,25 @@ class Agent:
                                     console.print(f"  ✓ {result['message']}", style="green")
                         
                         # Add tool result message
-                        tool_result_msg = build_tool_result_message(tool_call, result)
+                        tool_result_msg = build_tool_result_message(tool_call, result, self.config.context_window)
                         self.messages.append(tool_result_msg)
                     
                     # Continue the loop to let model process tool results
                     continue
                 
                 else:
-                    # Final response
-                    if message.get("content"):
-                        if not non_interactive:
-                            console.print()  # Add spacing
-                        else:
-                            # Print response for cron jobs
-                            print(message["content"])
-                    
-                    # Add assistant message
+                    # Final text response
+                    content = message.get("content")
                     self.messages.append(message)
+                    if non_interactive and content:
+                        # Non-interactive: display text (strip tags if needed)
+                        if self.llm_client.use_reasoning_tags:
+                            visible, _ = strip_thinking_tags(content)
+                            if visible:
+                                print(visible)
+                        else:
+                            print(content)
+                    # Interactive display was already handled by _stream_response
                     break
             
             except asyncio.CancelledError:
@@ -288,15 +368,37 @@ class Agent:
                 break
     
     async def _stream_response(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Get response from LLM and display it."""
+        """Stream response from LLM and display tokens progressively."""
         try:
-            response = await self.llm_client.chat(messages, tools=tools, stream=False)
+            collected_text = ""
+            first_token = True
 
-            # Print any text content (including thinking before tool calls)
-            if response.get("choices"):
-                msg = response["choices"][0]["message"]
-                if msg.get("content"):
-                    console.print(Markdown(msg["content"]))
+            async for token in self.llm_client.stream_chat(
+                messages, tools=tools, system_prompt=self.system_prompt
+            ):
+                collected_text += token
+                if not self.llm_client.use_reasoning_tags:
+                    if first_token:
+                        console.print()  # blank line before response
+                        first_token = False
+                    console.file.write(token)
+                    console.file.flush()
+
+            response = self.llm_client._last_stream_response
+            if response is None:
+                response = {
+                    "choices": [{"message": {"role": "assistant"}, "finish_reason": "stop"}]
+                }
+
+            # For reasoning tags mode: display after stripping tags
+            if self.llm_client.use_reasoning_tags and collected_text:
+                display_text, _ = strip_thinking_tags(collected_text)
+                if display_text:
+                    console.print()
+                    console.print(Markdown(display_text))
+            elif not self.llm_client.use_reasoning_tags and collected_text:
+                console.file.write("\n")  # final newline after streamed text
+                console.file.flush()
 
             return response
 
@@ -331,7 +433,7 @@ class Agent:
             console.print("✅ Added to memory", style="green")
         
         elif cmd == '/compact':
-            if len(self.messages) > 3:
+            if len(self.messages) > 2:
                 console.print("🔄 Compacting conversation...", style="yellow")
                 self.messages = await self.compactor.compact_messages(self.messages)
                 console.print("✅ Conversation compacted", style="green")
@@ -347,14 +449,17 @@ class Agent:
             else:
                 console.print("No skills found.", style="yellow")
         
-        elif cmd == '/stats':
-            stats = self.compactor.get_context_stats(self.messages)
-            console.print(f"[bold blue]Context Statistics:[/bold blue]")
-            console.print(f"Messages: {stats['message_count']}")
-            console.print(f"Estimated tokens: {stats['estimated_tokens']}")
-            console.print(f"Context usage: {stats['usage_percent']}%")
-            console.print(f"Needs compaction: {stats['needs_compaction']}")
-        
+        elif cmd == '/status' or cmd == '/stats':
+            self._show_status()
+
+        elif cmd == '/usage':
+            console.print(self.llm_client.usage.summary(self.config.model))
+
+        elif cmd == '/new' or cmd == '/reset':
+            self.messages.clear()
+            self.compactor.compaction_count = 0
+            console.print("🆕 New session started. Context cleared.", style="green")
+
         else:
             console.print(f"Unknown command: {command}", style="red")
     
@@ -369,13 +474,79 @@ class Agent:
 - /remember TEXT  - Add text to memory
 - /skills         - List available skills
 - /compact        - Force conversation compaction
-- /stats          - Show context statistics
+- /status         - Show status card (model, tokens, cache, context)
+- /stats          - Alias for /status
+- /usage          - Show detailed token usage and estimated cost
+- /new, /reset    - Start a new session (clear context)
 
 [cyan]Usage:[/cyan]
 Just type your requests normally and I'll help you with tasks using available tools.
 """
         console.print(help_text)
     
+    def _show_status(self):
+        """Show rich status card with model, tokens, cache, context, and runtime info."""
+        # Version
+        console.print("\U0001f420 [bold cyan]Koi[/bold cyan] v0.1.0")
+
+        # Model + masked key
+        key = self.config.api_key
+        if len(key) > 10:
+            masked = key[:6] + "..." + key[-4:]
+        else:
+            masked = "***"
+        console.print(
+            f"\U0001f9e0 Model: {self.config.model} \u00b7 \U0001f511 {masked} ({self.config.api_format})"
+        )
+
+        # Tokens + cost
+        u = self.llm_client.usage
+        cost = estimate_cost(
+            self.config.model,
+            u.input_tokens,
+            u.output_tokens,
+            u.cache_read_tokens,
+            u.cache_creation_tokens,
+        )
+        cost_str = f" \u00b7 \U0001f4b0 ${cost:.4f}" if cost > 0 else ""
+        console.print(
+            f"\U0001f9ee Tokens: {_fmt_num(u.input_tokens)} in / {_fmt_num(u.output_tokens)} out{cost_str}"
+        )
+
+        # Cache (only show if any cache activity)
+        total_input = u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens
+        if u.cache_read_tokens or u.cache_creation_tokens:
+            hit_pct = (
+                int(u.cache_read_tokens / total_input * 100) if total_input > 0 else 0
+            )
+            console.print(
+                f"\U0001f5c4\ufe0f  Cache: {hit_pct}% hit \u00b7 {_fmt_num(u.cache_read_tokens)} cached, {_fmt_num(u.cache_creation_tokens)} new"
+            )
+
+        # Context
+        stats = self.compactor.get_context_stats(self.messages)
+        ctx_tokens = stats["estimated_tokens"]
+        ctx_max = self.config.context_window
+        ctx_pct = stats["usage_percent"]
+        compactions = self.compactor.compaction_count
+        console.print(
+            f"\U0001f4da Context: {_fmt_num(ctx_tokens)}/{_fmt_num(ctx_max)} ({ctx_pct}%) \u00b7 \U0001f9f9 Compactions: {compactions}"
+        )
+
+        # Runtime
+        think = self.config.thinking_level
+        cache_status = "on" if self.config.prompt_caching else "off"
+        console.print(
+            f"\u2699\ufe0f  Runtime: {self.config.api_format} \u00b7 Think: {think} \u00b7 Prompt cache: {cache_status}"
+        )
+
+        # Sub-agents
+        active = len(
+            [r for r in self.subagent_manager.active_runs.values() if not r.completed]
+        )
+        if active > 0:
+            console.print(f"\U0001f916 Sub-agents: {active} active")
+
     def _handle_sigint(self, signum, frame):
         """Handle SIGINT (Ctrl+C).
 
@@ -386,3 +557,24 @@ Just type your requests normally and I'll help you with tasks using available to
         if self._current_task and not self._current_task.done():
             self._current_task.cancel()
         raise KeyboardInterrupt
+
+    async def _on_subagent_complete(self, run) -> None:
+        """Callback invoked when a sub-agent finishes."""
+        summary = ""
+        if run.result:
+            summary = run.result.get("summary", run.result.get("response", ""))
+        if run.error:
+            summary = f"Error: {run.error}"
+        if not summary and run.stdout:
+            summary = run.stdout[:500]
+
+        label = run.label or run.task[:60]
+        msg = {
+            "role": "system",
+            "content": (
+                f"[Sub-agent '{label}' (id={run.id}) completed]\n"
+                f"Exit code: {run.exit_code}\n"
+                f"Result: {summary[:1000]}"
+            ),
+        }
+        self._pending_subagent_results.append(msg)

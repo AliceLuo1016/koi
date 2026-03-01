@@ -7,6 +7,21 @@ import tiktoken
 
 from .llm import LLMClient
 
+# Safety timeout for compaction LLM calls (seconds)
+COMPACTION_TIMEOUT = 120
+
+
+async def compact_with_timeout(compact_fn, timeout: int = COMPACTION_TIMEOUT):
+    """Run a compaction coroutine with a safety timeout.
+
+    If the compaction takes longer than *timeout* seconds, return a
+    fallback summary string instead of waiting indefinitely.
+    """
+    try:
+        return await asyncio.wait_for(compact_fn(), timeout=timeout)
+    except asyncio.TimeoutError:
+        return "[Compaction timed out — older context may be incomplete]"
+
 
 class ContextCompactor:
     """Handle context window management and message compaction."""
@@ -15,7 +30,8 @@ class ContextCompactor:
         """Initialize compactor with LLM client and context window size."""
         self.llm_client = llm_client
         self.context_window = context_window
-        
+        self.compaction_count = 0
+
         # Initialize tokenizer for rough token estimation
         try:
             self.tokenizer = tiktoken.encoding_for_model("gpt-4")
@@ -43,10 +59,10 @@ class ContextCompactor:
         return total_tokens
     
     def needs_compaction(self, messages: List[Dict[str, Any]]) -> bool:
-        """Check if messages exceed 70% of context window."""
+        """Check if messages exceed 60% of context window."""
         estimated_tokens = self.estimate_tokens(messages)
-        threshold = self.context_window * 0.7
-        
+        threshold = self.context_window * 0.6
+
         return estimated_tokens > threshold
     
     def _safe_split_index(self, messages: List[Dict[str, Any]], split_index: int) -> int:
@@ -60,12 +76,16 @@ class ContextCompactor:
         return split_index
 
     async def compact_messages(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Compact messages by summarizing the oldest 40%."""
-        if len(messages) <= 3:  # Keep at least system prompt and recent messages
+        """Compact messages by summarizing the oldest 40%.
+
+        The system prompt is stored separately (never in messages), so no
+        special handling is needed here.
+        """
+        if len(messages) <= 2:
             return messages
 
         # Calculate split point (40% of messages)
-        split_index = max(1, int(len(messages) * 0.4))  # Keep at least the system message
+        split_index = max(1, int(len(messages) * 0.4))
 
         # Ensure we don't split in the middle of a tool call/result pair
         split_index = self._safe_split_index(messages, split_index)
@@ -74,9 +94,13 @@ class ContextCompactor:
         to_compact = messages[:split_index]
         to_keep = messages[split_index:]
 
-        # Create summary of messages to compact
+        # Create summary with safety timeout
         try:
-            summary = await self._create_summary(to_compact)
+            summary = await compact_with_timeout(
+                lambda: self._create_summary(to_compact)
+            )
+
+            self.compaction_count += 1
 
             # Create summary message
             summary_message = {
@@ -84,7 +108,6 @@ class ContextCompactor:
                 "content": f"[Previous conversation summary: {summary}]"
             }
 
-            # Return compacted conversation
             return [summary_message] + to_keep
 
         except asyncio.CancelledError:

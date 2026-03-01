@@ -42,7 +42,6 @@ def test_safe_split_index_no_tool():
     """Returns same index when no tool result at split point."""
     compactor = _make_compactor()
     messages = [
-        {"role": "system", "content": "sys"},
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
         {"role": "user", "content": "bye"},
@@ -54,7 +53,7 @@ def test_safe_split_index_adjusts_for_tool():
     """Walks back past tool results to include the assistant tool_call."""
     compactor = _make_compactor()
     messages = [
-        {"role": "system", "content": "sys"},
+        {"role": "user", "content": "hi"},
         {"role": "assistant", "tool_calls": [{"id": "c1"}]},
         {"role": "tool", "content": "result"},
         {"role": "user", "content": "ok"},
@@ -64,10 +63,9 @@ def test_safe_split_index_adjusts_for_tool():
 
 
 async def test_compact_messages_small():
-    """Returns unchanged if ≤3 messages."""
+    """Returns unchanged if ≤2 messages."""
     compactor = _make_compactor()
     messages = [
-        {"role": "system", "content": "sys"},
         {"role": "user", "content": "hi"},
         {"role": "assistant", "content": "hello"},
     ]
@@ -87,7 +85,6 @@ async def test_compact_messages_creates_summary():
     )
 
     messages = [
-        {"role": "system", "content": "sys"},
         {"role": "user", "content": "msg1"},
         {"role": "assistant", "content": "resp1"},
         {"role": "user", "content": "msg2"},
@@ -97,7 +94,7 @@ async def test_compact_messages_creates_summary():
 
     result = await compactor.compact_messages(messages)
 
-    # Should have a summary message at the start
+    # Summary message comes first
     assert result[0]["role"] == "system"
     assert "summary" in result[0]["content"].lower()
     # Should be shorter than original
@@ -145,12 +142,11 @@ def test_get_context_stats():
 
 
 async def test_compact_messages_falls_back_on_llm_failure():
-    """When LLM summarization fails, compact_messages truncates instead."""
+    """When LLM summarization fails, compact_messages truncates."""
     compactor = _make_compactor(context_window=128000)
     compactor.llm_client.chat = AsyncMock(side_effect=RuntimeError("LLM down"))
 
     messages = [
-        {"role": "system", "content": "sys"},
         {"role": "user", "content": "msg1"},
         {"role": "assistant", "content": "resp1"},
         {"role": "user", "content": "msg2"},
@@ -172,6 +168,56 @@ async def test_create_summary_empty_choices_fallback():
         [{"role": "user", "content": "hello"}]
     )
     assert "unavailable" in summary.lower() or summary
+
+
+async def test_compact_messages_produces_summary():
+    """After compaction, a summary message is produced."""
+    compactor = _make_compactor(context_window=128000)
+
+    compactor.llm_client.chat = AsyncMock(
+        return_value={
+            "choices": [{"message": {"content": "Discussed file operations."}}]
+        }
+    )
+
+    messages = [
+        {"role": "user", "content": "Read my files"},
+        {"role": "assistant", "content": "Sure, reading files now."},
+        {"role": "user", "content": "What did you find?"},
+        {"role": "assistant", "content": "I found some data."},
+        {"role": "user", "content": "Great, continue."},
+    ]
+
+    result = await compactor.compact_messages(messages)
+
+    # Summary should be the first message (no system prompt in messages anymore)
+    assert result[0]["role"] == "system"
+    assert "summary" in result[0]["content"].lower()
+
+
+async def test_compact_messages_summary_is_first():
+    """Summary message is the first element after compaction."""
+    compactor = _make_compactor(context_window=128000)
+
+    compactor.llm_client.chat = AsyncMock(
+        return_value={
+            "choices": [{"message": {"content": "User asked about files."}}]
+        }
+    )
+
+    messages = [
+        {"role": "user", "content": "msg1"},
+        {"role": "assistant", "content": "resp1"},
+        {"role": "user", "content": "msg2"},
+        {"role": "assistant", "content": "resp2"},
+        {"role": "user", "content": "msg3"},
+    ]
+
+    result = await compactor.compact_messages(messages)
+
+    # messages[0] = summary
+    assert result[0]["role"] == "system"
+    assert "Previous conversation summary" in result[0]["content"]
 
 
 def test_tokenizer_fallback(monkeypatch):

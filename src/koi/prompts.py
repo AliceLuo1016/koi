@@ -14,79 +14,109 @@ from .skills import SkillsManager
 from .tools import get_tool_definitions
 
 
-def build_system_prompt(config: Config, non_interactive: bool = False) -> str:
+def build_system_prompt(
+    config: Config,
+    non_interactive: bool = False,
+    use_reasoning_tags: bool = False,
+) -> str:
     """Build the complete system prompt for the agent."""
 
-    # Base agent instructions
-    base_prompt = """IMPORTANT: You MUST always respond in English, regardless of user locale or input language.
+    sections = []
 
-You are Koi, a terminal-based AI agent that helps users with tasks through conversation and tool usage.
+    # 1. Core identity
+    sections.append(
+        "You are Koi, a terminal-based AI agent. "
+        "Be helpful, accurate, and concise. Always respond in English."
+    )
 
-You have access to the following capabilities:
-- Read, write, and edit files
-- Execute shell commands (with safety checks)
-- Search and fetch web content
-- Manage memory and skills
-- Work with project-specific configurations
+    # 2. Reasoning format (early for emphasis, before tools)
+    if use_reasoning_tags:
+        sections.append(_build_reasoning_format_section())
 
-You think step by step and use tools to accomplish tasks. When a user asks you to do something:
-1. Understand what they want
-2. Plan the approach
-3. Use appropriate tools to gather information or make changes
-4. Verify results and report back
+    # 3. Tool call style
+    sections.append("""## Tool Call Style
+- Do not narrate routine, low-risk tool calls — just call the tool.
+- Narrate only for multi-step work, complex problems, or sensitive actions (e.g., deletions).
+- Keep narration brief and value-dense.""")
 
-Be helpful, accurate, and safe. Always respond in English. Always confirm before running potentially dangerous commands.
+    # 4. Safety
+    sections.append("""## Safety
+- Prioritize safety and human oversight over task completion.
+- Do not run destructive commands without asking first.
+- Confirm before: deleting files, sending emails, anything irreversible.
+- When in doubt, ask.""")
 
-When analyzing logs:
-- Look for error patterns, spikes, and anomalies
-- If you find issues, use create_alert to record them with a proposed fix
-- Use list_alerts to check for pending alerts
-- Use resolve_alert when the user approves or dismisses a fix
-
-Important: For scheduling tasks, use the built-in cron tools:
-- Add: add_cron_job(schedule, task) — task is a natural language instruction koi will interpret each run
-- List: list_cron_jobs()
-- Remove: remove_cron_job(job_id)
-Cron logs are stored in .koi/cron-logs/ automatically. Do NOT use exec_command for cron management."""
-
-    sections = [base_prompt]
-
-    # Add tools information
+    # 5. Tools (with per-tool usage tips)
     tools_section = _build_tools_section()
     sections.append(tools_section)
 
-    # Add skills information
+    # 5. Skills
     skills_section = _build_skills_section(config)
     sections.append(skills_section)
 
-    # Add project instructions if available
+    # 6. Memory guidance
+    sections.append("""## Memory
+Before answering questions about prior work, decisions, or preferences: check memory first using update_memory.
+When analyzing logs, use create_alert / list_alerts / resolve_alert for structured issue tracking.""")
+
+    # 7. Cron
+    sections.append("""## Cron
+Use built-in cron tools for scheduling — do NOT use exec_command for cron management.
+- add_cron_job(schedule, task) — task is a natural language instruction koi interprets each run
+- list_cron_jobs() / remove_cron_job(job_id)
+Cron logs are stored in .koi/cron-logs/ automatically.""")
+
+    # 8. Project instructions
     project_section = _build_project_section()
     if project_section:
         sections.append(project_section)
 
-    # Add memory if available
+    # 9. Memory content
     memory_section = _build_memory_section()
     if memory_section:
         sections.append(memory_section)
 
-    # Add alerts check
+    # 10. Alerts
     alerts_section = _build_alerts_section()
     if alerts_section:
         sections.append(alerts_section)
 
-    # Non-interactive mode: no confirmation needed
+    # 11. Non-interactive mode
     if non_interactive:
-        sections.append("""IMPORTANT: You are running in non-interactive (cron) mode. There is no user to respond.
+        sections.append("""## Non-Interactive Mode
+IMPORTANT: You are running in non-interactive (cron) mode. There is no user to respond.
 - Do NOT ask for confirmation or clarification. Execute all tool calls and commands directly.
 - Do NOT wait for user input. Complete the task autonomously and report the result.
 - Do NOT create or schedule cron jobs. You ARE a cron job. Just execute the task immediately.
 - Ignore phrases like "every hour" or "every minute" in the task — those describe the cron schedule, not what you should do. Focus on the actual action.""")
 
-    # Add context information
+    # 12. Context
     context_section = _build_context_section()
     sections.append(context_section)
 
     return "\n\n".join(sections)
+
+
+def _build_reasoning_format_section() -> str:
+    """Build the reasoning format section for tag-based thinking models."""
+    return """## Reasoning Format
+ALL internal reasoning MUST be inside <think>...</think>.
+Do not output any analysis outside <think>.
+Format every reply as <think>...</think> then <final>...</final>, with no other text.
+Only text inside <final> is shown to the user; everything else is discarded.
+Example: <think>Short internal reasoning.</think><final>Hey there!</final>"""
+
+
+_TOOL_TIPS = {
+    "read_file": "Output truncated to 2000 lines / 50KB. Use offset/limit for large files.",
+    "write_file": "Creates parent directories automatically.",
+    "edit_file": "old_text must match exactly including whitespace.",
+    "exec_command": "Output capped at 50KB. Use timeout for long-running commands.",
+    "glob_files": "Faster and safer than exec_command with find. Max 500 results.",
+    "grep_files": "Returns up to 200 matches with file path and line number.",
+    "web_fetch": "Content capped at 20K chars.",
+    "web_search": "Placeholder — not yet implemented.",
+}
 
 
 def _build_tools_section() -> str:
@@ -98,7 +128,11 @@ def _build_tools_section() -> str:
         func = tool["function"]
         name = func["name"]
         description = func["description"]
-        tool_list.append(f"- {name}: {description}")
+        tip = _TOOL_TIPS.get(name, "")
+        if tip:
+            tool_list.append(f"- {name}: {description} — {tip}")
+        else:
+            tool_list.append(f"- {name}: {description}")
 
     return f"""Available Tools:
 {chr(10).join(tool_list)}
@@ -113,18 +147,19 @@ def _build_skills_section(config: Config) -> str:
         skills_summary = skills_manager.get_skills_summary()
 
         if "No skills available" in skills_summary:
-            return "Skills: No skills found in configured paths."
+            return "## Skills\nNo skills found in configured paths."
 
-        return f"""Skills:
+        return f"""## Skills
 {skills_summary}
 
-IMPORTANT skill rules:
-1. When a user's input matches or relates to an available skill, ALWAYS use read_skill to load it FIRST before responding, then follow its instructions exactly.
-2. To load a skill, use the read_skill tool with the skill name (e.g. read_skill("log-monitor")). Do NOT use read_file to read skill files.
-3. Match generously — e.g. "cluster usage" should trigger the cluster usage skill, "check logs" should trigger a log monitoring skill, etc."""
+Before responding: scan available skills above.
+- If one clearly matches the user's request, use read_skill to load it, then follow its instructions.
+- If none clearly match, do not read any skill.
+- Never read more than one skill upfront; only read after selecting.
+- Use read_skill (not read_file) to load skills."""
 
     except Exception:
-        return "Skills: Error loading skills."
+        return "## Skills\nError loading skills."
 
 
 def _build_project_section() -> str:
@@ -200,6 +235,40 @@ def _build_context_section() -> str:
 Use this context to provide relevant assistance."""
 
 
+_TRUNCATION_MIN_CHARS = 2000
+_TRUNCATION_MAX_CHARS = 400_000
+_TRUNCATION_SUFFIX = (
+    "\n\n\u26a0\ufe0f [Content truncated \u2014 original was too large for the model "
+    "context window. Use offset/limit parameters to read smaller chunks.]"
+)
+
+
+def truncate_tool_result(text: str, context_window: int) -> str:
+    """Truncate a tool result string to fit within context-window budget.
+
+    Budget = min(context_window * 0.3 * 4, 400_000) chars, but always at
+    least 2000 chars.  When truncating, try to break at a newline boundary.
+    """
+    max_chars = max(
+        _TRUNCATION_MIN_CHARS,
+        min(int(context_window * 0.3 * 4), _TRUNCATION_MAX_CHARS),
+    )
+    if len(text) <= max_chars:
+        return text
+
+    budget = max_chars - len(_TRUNCATION_SUFFIX)
+    if budget < _TRUNCATION_MIN_CHARS:
+        budget = _TRUNCATION_MIN_CHARS
+
+    # Try to break at a newline boundary
+    cut = text[:budget]
+    last_nl = cut.rfind("\n")
+    if last_nl > _TRUNCATION_MIN_CHARS:
+        cut = cut[: last_nl + 1]
+
+    return cut + _TRUNCATION_SUFFIX
+
+
 def build_tool_call_message(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     """Build a message for a tool call in OpenAI format."""
     return {
@@ -209,16 +278,20 @@ def build_tool_call_message(tool_call: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def build_tool_result_message(tool_call: Dict[str, Any], result: Dict[str, Any]) -> Dict[str, Any]:
+def build_tool_result_message(
+    tool_call: Dict[str, Any],
+    result: Dict[str, Any],
+    context_window: int = 128_000,
+) -> Dict[str, Any]:
     """Build a message for tool result in OpenAI format."""
     return {
         "role": "tool",
         "tool_call_id": tool_call["id"],
-        "content": _format_tool_result(result)
+        "content": _format_tool_result(result, context_window)
     }
 
 
-def _format_tool_result(result: Dict[str, Any]) -> str:
+def _format_tool_result(result: Dict[str, Any], context_window: int = 128_000) -> str:
     """Format tool result for inclusion in conversation."""
     if not result.get("success", False):
         error_msg = result.get("error", "")
@@ -228,14 +301,18 @@ def _format_tool_result(result: Dict[str, Any]) -> str:
 
     # Format based on result content
     if "content" in result:
-        return result["content"]
+        text = result["content"]
     elif "message" in result:
-        return result["message"]
+        text = result["message"]
     elif "stdout" in result:
-        output = result["stdout"]
+        text = result["stdout"]
         if result.get("stderr"):
-            output += f"\n[stderr]: {result['stderr']}"
-        return output
+            text += f"\n[stderr]: {result['stderr']}"
+        if result.get("truncation_notice"):
+            text += f"\n{result['truncation_notice']}"
     else:
         # Return JSON representation for complex results
-        return json.dumps(result, indent=2)
+        text = json.dumps(result, indent=2)
+
+    # Layer 2: generic safety-net truncation based on context window
+    return truncate_tool_result(text, context_window)

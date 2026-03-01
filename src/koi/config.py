@@ -5,6 +5,36 @@ import os
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 
+# Valid thinking levels (off disables, others set increasing reasoning effort)
+THINK_LEVELS = ("off", "minimal", "low", "medium", "high")
+
+
+def normalize_think_level(value: str) -> Optional[str]:
+    """Normalize a user-provided thinking level string to a canonical level.
+
+    Returns None for unrecognized inputs.
+    """
+    v = value.strip().lower()
+    mapping = {
+        "off": "off",
+        "disabled": "off",
+        "none": "off",
+        "on": "low",
+        "enable": "low",
+        "enabled": "low",
+        "min": "minimal",
+        "minimal": "minimal",
+        "think": "minimal",
+        "low": "low",
+        "med": "medium",
+        "mid": "medium",
+        "medium": "medium",
+        "high": "high",
+        "max": "high",
+        "ultra": "high",
+    }
+    return mapping.get(v)
+
 
 def load_claude_code_api_key() -> Optional[str]:
     """Load the Anthropic API key from Claude Code's config (~/.claude.json)."""
@@ -35,6 +65,8 @@ class Config:
         skills_paths: List[str] = None,
         temperature: float = None,
         api_format: str = None,
+        thinking_level: str = "low",
+        prompt_caching: bool = True,
     ):
         self.api_base = api_base
         self.model = model
@@ -42,6 +74,8 @@ class Config:
         self.context_window = context_window
         self.skills_paths = skills_paths or [".koi/skills"]
         self.temperature = temperature
+        self.thinking_level = thinking_level if thinking_level in THINK_LEVELS else "low"
+        self.prompt_caching = prompt_caching
         # Auto-detect api_format from model name if not explicitly set
         if api_format is not None:
             self.api_format = api_format
@@ -81,6 +115,8 @@ class Config:
             skills_paths=data.get("skills_paths", [".koi/skills"]),
             temperature=data.get("temperature"),
             api_format=data.get("api_format"),
+            thinking_level=data.get("thinking_level", "low"),
+            prompt_caching=data.get("prompt_caching", True),
         )
     
     def save(self, config_path: Path = None):
@@ -98,12 +134,29 @@ class Config:
             "context_window": self.context_window,
             "skills_paths": self.skills_paths,
             "api_format": self.api_format,
+            "thinking_level": self.thinking_level,
+            "prompt_caching": self.prompt_caching,
         }
         if self.temperature is not None:
             data["temperature"] = self.temperature
 
         with open(config_path, "w") as f:
             json.dump(data, f, indent=2)
+
+    @property
+    def spawn_depth(self) -> int:
+        """Current sub-agent spawn depth (from KOI_SPAWN_DEPTH env var)."""
+        return int(os.environ.get("KOI_SPAWN_DEPTH", "0"))
+
+    def effective_thinking_level(self) -> str:
+        """Return thinking_level, or 'off' if the model doesn't support it."""
+        if self.thinking_level == "off":
+            return "off"
+        # Lazy import to avoid circular dependency (llm imports config)
+        from .llm import supports_thinking
+        if supports_thinking(self.model, self.api_format):
+            return self.thinking_level
+        return "off"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert config to dictionary."""
@@ -115,6 +168,8 @@ class Config:
             "context_window": self.context_window,
             "skills_paths": self.skills_paths,
             "api_format": self.api_format,
+            "thinking_level": self.thinking_level,
+            "prompt_caching": self.prompt_caching,
         }
         if self.temperature is not None:
             d["temperature"] = self.temperature

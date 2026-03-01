@@ -12,7 +12,7 @@ from rich.table import Table
 from rich.markdown import Markdown
 
 from .agent import Agent
-from .config import Config, create_default_config, load_claude_code_api_key
+from .config import Config, create_default_config, load_claude_code_api_key, normalize_think_level
 from .cron import CronManager
 from .llm import LLMClient
 from .memory import Memory
@@ -525,7 +525,7 @@ def switch():
 
 @main.command()
 @click.option(
-    "--task", 
+    "--task",
     help="Run a specific task and exit (for cron jobs)"
 )
 @click.option(
@@ -533,19 +533,49 @@ def switch():
     is_flag=True,
     help="Run without interactive prompt (for cron jobs)"
 )
-def run(task: Optional[str], non_interactive: bool):
+@click.option(
+    "--thinking",
+    type=click.Choice(["off", "minimal", "low", "medium", "high"], case_sensitive=False),
+    default=None,
+    help="Set thinking/reasoning level (overrides config)"
+)
+@click.option(
+    "--result-file",
+    default=None,
+    help="Write final response to this JSON file (for sub-agent mode)"
+)
+@click.option(
+    "--model",
+    "model_override",
+    default=None,
+    help="Override the model from config"
+)
+def run(
+    task: Optional[str],
+    non_interactive: bool,
+    thinking: Optional[str],
+    result_file: Optional[str],
+    model_override: Optional[str],
+):
     """Start an interactive agent session or run a specific task."""
     try:
         config = Config.load()
-        agent = Agent(config, non_interactive=bool(task or non_interactive))
+        if thinking is not None:
+            config.thinking_level = normalize_think_level(thinking) or thinking
+        if model_override is not None:
+            config.model = model_override
+
+        agent = Agent(config, non_interactive=non_interactive or bool(task))
 
         if task:
             # Run specific task and exit
-            asyncio.run(agent.run_task(task, non_interactive=non_interactive))
+            asyncio.run(
+                _run_task(agent, task, non_interactive, result_file)
+            )
         else:
             # Interactive session
             asyncio.run(agent.run_interactive())
-    
+
     except FileNotFoundError as e:
         if ".koi/config.json" in str(e):
             console.print("❌ No .koi/config.json found. Run 'koi init' first.", style="red")
@@ -553,6 +583,34 @@ def run(task: Optional[str], non_interactive: bool):
             console.print(f"❌ File not found: {e}", style="red")
     except Exception as e:
         console.print(f"❌ Error: {e}", style="red")
+
+
+async def _run_task(
+    agent: "Agent",
+    task: str,
+    non_interactive: bool,
+    result_file: Optional[str],
+):
+    """Run a task and optionally write the result to a JSON file."""
+    await agent.run_task(task, non_interactive=non_interactive)
+
+    if result_file:
+        # Extract final assistant response from conversation
+        response_text = ""
+        for msg in reversed(agent.messages):
+            if msg.get("role") == "assistant" and msg.get("content"):
+                response_text = msg["content"]
+                break
+
+        import json as _json
+        result = {
+            "summary": response_text[:2000],
+            "response": response_text,
+            "message_count": len(agent.messages),
+        }
+        result_path = Path(result_file)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(_json.dumps(result, indent=2))
 
 
 @main.command()
@@ -677,7 +735,8 @@ def config():
         table.add_row("Context Window", str(config.context_window))
         table.add_row("Skills Paths", ", ".join(config.skills_paths))
         table.add_row("Temperature", str(config.temperature))
-        
+        table.add_row("Thinking Level", config.thinking_level)
+
         console.print(table)
     
     except Exception as e:

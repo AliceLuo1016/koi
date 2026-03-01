@@ -76,14 +76,18 @@ def cc_client():
 # ── _convert_messages_to_input ──
 
 
-def test_system_message_becomes_instructions(client):
-    messages = [{"role": "system", "content": "You are helpful."}]
-    instructions, input_items = client._convert_messages_to_input(messages)
+def test_system_prompt_becomes_instructions(client):
+    """system_prompt parameter becomes instructions and developer message."""
+    messages = [{"role": "user", "content": "Hi"}]
+    instructions, input_items = client._convert_messages_to_input(
+        messages, system_prompt="You are helpful."
+    )
     assert instructions == "You are helpful."
-    # Also injected as a developer message
-    assert len(input_items) == 1
+    # Developer message prepended + user message
+    assert len(input_items) == 2
     assert input_items[0]["role"] == "developer"
     assert input_items[0]["content"] == "You are helpful."
+    assert input_items[1]["role"] == "user"
 
 
 def test_user_message(client):
@@ -170,7 +174,6 @@ def test_tool_result_becomes_function_call_output(client):
 
 def test_full_conversation_roundtrip(client):
     messages = [
-        {"role": "system", "content": "Be helpful."},
         {"role": "user", "content": "Read test.txt"},
         {
             "role": "assistant",
@@ -189,7 +192,9 @@ def test_full_conversation_roundtrip(client):
         {"role": "assistant", "content": "The file says hello world."},
         {"role": "user", "content": "Thanks"},
     ]
-    instructions, input_items = client._convert_messages_to_input(messages)
+    instructions, input_items = client._convert_messages_to_input(
+        messages, system_prompt="Be helpful."
+    )
     assert instructions == "Be helpful."
     # developer msg + user + function_call + function_call_output + assistant + user
     assert len(input_items) == 6
@@ -349,7 +354,6 @@ def test_convert_empty_output(client):
 async def test_chat_builds_correct_payload(client):
     """Verify the payload sent to the API matches Responses API format."""
     messages = [
-        {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hi"},
     ]
     tools = [
@@ -386,7 +390,7 @@ async def test_chat_builds_correct_payload(client):
 
     client.client.post = fake_post
 
-    result = await client.chat(messages, tools=tools)
+    result = await client.chat(messages, tools=tools, system_prompt="You are helpful.")
 
     # Verify payload structure
     assert captured_payload["model"] == "test-model"
@@ -429,15 +433,16 @@ async def test_chat_url_uses_api_base_directly(client):
 
 
 def test_build_cc_payload_basic(cc_client):
-    """Test Chat Completions payload is built correctly."""
+    """Test Chat Completions payload is built correctly with system_prompt."""
     messages = [
-        {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hi"},
     ]
-    payload = cc_client._build_cc_payload(messages)
+    payload = cc_client._build_cc_payload(messages, system_prompt="You are helpful.")
 
     assert payload["model"] == "us/aws/anthropic/bedrock-claude-opus-4-6"
-    assert payload["messages"] == messages
+    # System prompt is prepended to payload messages
+    assert payload["messages"][0] == {"role": "system", "content": "You are helpful."}
+    assert payload["messages"][1] == {"role": "user", "content": "Hi"}
     assert payload["max_tokens"] == 4096
     assert "stream" not in payload
 
@@ -491,7 +496,6 @@ def test_convert_cc_response_passthrough(cc_client):
 async def test_chat_completions_builds_correct_payload(cc_client):
     """Verify CC path sends Chat Completions format payload."""
     messages = [
-        {"role": "system", "content": "You are helpful."},
         {"role": "user", "content": "Hi"},
     ]
     tools = [
@@ -528,11 +532,13 @@ async def test_chat_completions_builds_correct_payload(cc_client):
 
     cc_client.client.post = fake_post
 
-    result = await cc_client.chat(messages, tools=tools)
+    result = await cc_client.chat(messages, tools=tools, system_prompt="You are helpful.")
 
     # Verify CC payload structure
     assert captured_payload["model"] == "us/aws/anthropic/bedrock-claude-opus-4-6"
-    assert captured_payload["messages"] == messages
+    # System prompt prepended to payload messages
+    assert captured_payload["messages"][0] == {"role": "system", "content": "You are helpful."}
+    assert captured_payload["messages"][1] == {"role": "user", "content": "Hi"}
     assert captured_payload["max_tokens"] == 4096
     assert captured_payload["tools"] == tools
     assert "input" not in captured_payload
@@ -828,12 +834,13 @@ def anthropic_client():
 
 
 def test_convert_messages_to_anthropic_system(anthropic_client):
-    """System message is extracted as system_prompt, not appended to messages."""
+    """system_prompt parameter is returned as system_prompt."""
     messages = [
-        {"role": "system", "content": "Be helpful."},
         {"role": "user", "content": "Hi"},
     ]
-    system, msgs = anthropic_client._convert_messages_to_anthropic(messages)
+    system, msgs = anthropic_client._convert_messages_to_anthropic(
+        messages, system_prompt="Be helpful."
+    )
     assert system == "Be helpful."
     assert len(msgs) == 1
     assert msgs[0]["role"] == "user"
@@ -1219,6 +1226,7 @@ async def test_anthropic_payload_includes_temperature():
         model="claude-3",
         api_format="anthropic",
         temperature=0.7,
+        thinking_level="off",
     )
     anthro_client = LLMClient(config)
     captured: dict = {}

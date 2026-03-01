@@ -15,6 +15,12 @@ from bs4 import BeautifulSoup
 from .sandbox import Sandbox
 from .skills import SkillsManager
 
+# Per-tool output limits
+MAX_READ_LINES = 2000
+MAX_READ_BYTES = 50_000  # 50KB
+MAX_EXEC_OUTPUT_BYTES = 50_000  # 50KB
+MAX_WEB_FETCH_CHARS = 20_000
+
 
 def get_tool_definitions() -> List[Dict[str, Any]]:
     """Get OpenAI-format tool definitions."""
@@ -23,7 +29,7 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read the contents of a file",
+                "description": "Read the contents of a file. Defaults to first 2000 lines / 50KB. Use offset/limit for larger files.",
                 "parameters": {
                     "type": "object",
                     "properties": {
@@ -271,17 +277,63 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "required": ["alert_file", "resolution"]
                 }
             }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "spawn_subagent",
+                "description": "Spawn an isolated Koi sub-agent to run a task in the background. Returns a run_id to track progress.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "task": {"type": "string", "description": "Natural language task for the sub-agent to execute"},
+                        "label": {"type": "string", "description": "Short label for display purposes"},
+                        "model": {"type": "string", "description": "Override model for this sub-agent"},
+                        "thinking": {"type": "string", "description": "Thinking level for sub-agent (off/minimal/low/medium/high)"},
+                        "timeout_seconds": {"type": "integer", "description": "Kill sub-agent after this many seconds (0 = no timeout)"},
+                        "cwd": {"type": "string", "description": "Working directory for the sub-agent"}
+                    },
+                    "required": ["task"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_subagents",
+                "description": "List all active and completed sub-agents with their status.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "kill_subagent",
+                "description": "Kill a running sub-agent by its run ID.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "run_id": {"type": "string", "description": "The run ID of the sub-agent to kill"}
+                    },
+                    "required": ["run_id"]
+                }
+            }
         }
     ]
 
 
 class ToolExecutor:
     """Execute tool calls and return results."""
-    
-    def __init__(self, skills_manager: SkillsManager, sandbox: Sandbox = None):
+
+    def __init__(self, skills_manager: SkillsManager, sandbox: Sandbox = None, subagent_manager=None):
         """Initialize tool executor with skills manager and sandbox."""
         self.skills_manager = skills_manager
         self.sandbox = sandbox or Sandbox()
+        self.subagent_manager = subagent_manager
     
     async def execute_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
         """Execute a tool call and return the result."""
@@ -330,6 +382,12 @@ class ToolExecutor:
                 return await self._list_alerts(**arguments)
             elif function_name == "resolve_alert":
                 return await self._resolve_alert(**arguments)
+            elif function_name == "spawn_subagent":
+                return await self._spawn_subagent(**arguments)
+            elif function_name == "list_subagents":
+                return await self._list_subagents(**arguments)
+            elif function_name == "kill_subagent":
+                return await self._kill_subagent(**arguments)
             else:
                 return {
                     "error": f"Unknown function: {function_name}",
@@ -353,31 +411,52 @@ class ToolExecutor:
                 return {"error": reason, "success": False}
 
             file_path = Path(path)
-            
+
             if not file_path.exists():
                 return {"error": f"File not found: {path}", "success": False}
-            
+
             if not file_path.is_file():
                 return {"error": f"Path is not a file: {path}", "success": False}
-            
+
             with open(file_path, "r", encoding="utf-8") as f:
-                lines = f.readlines()
-            
-            # Apply offset and limit
+                all_lines = f.readlines()
+
+            total_lines = len(all_lines)
+            lines = all_lines
+
+            # Apply offset
             if offset:
                 lines = lines[offset - 1:]  # Convert to 0-indexed
-            
-            if limit:
-                lines = lines[:limit]
-            
+
+            # Apply limit: use explicit limit if provided, otherwise default
+            explicit_limit = limit is not None
+            effective_limit = limit if explicit_limit else MAX_READ_LINES
+            truncated_by_lines = len(lines) > effective_limit
+            if truncated_by_lines:
+                lines = lines[:effective_limit]
+
             content = "".join(lines)
-            
+
+            # Check byte size limit
+            truncated_by_bytes = False
+            if len(content.encode("utf-8")) > MAX_READ_BYTES:
+                truncated_by_bytes = True
+                # Truncate to fit within byte limit
+                encoded = content.encode("utf-8")[:MAX_READ_BYTES]
+                content = encoded.decode("utf-8", errors="ignore")
+                # Recount lines after byte truncation
+                lines = content.splitlines(keepends=True)
+
+            # Add truncation notice
+            if truncated_by_lines or truncated_by_bytes:
+                content += f"\n[output truncated: {len(lines)} of {total_lines} lines shown. Use offset/limit for more.]"
+
             return {
                 "content": content,
                 "lines_read": len(lines),
                 "success": True
             }
-        
+
         except Exception as e:
             return {"error": str(e), "success": False}
     
@@ -503,12 +582,31 @@ class ToolExecutor:
             stdout = stdout_bytes.decode("utf-8", errors="replace")
             stderr = stderr_bytes.decode("utf-8", errors="replace")
 
-            return {
+            # Truncate if combined output exceeds limit
+            combined_len = len(stdout) + len(stderr)
+            truncated = False
+            if combined_len > MAX_EXEC_OUTPUT_BYTES:
+                truncated = True
+                # Truncate stdout first, then stderr
+                if len(stdout) > MAX_EXEC_OUTPUT_BYTES:
+                    stdout = stdout[:MAX_EXEC_OUTPUT_BYTES]
+                    stderr = ""
+                else:
+                    remaining = MAX_EXEC_OUTPUT_BYTES - len(stdout)
+                    stderr = stderr[:remaining]
+
+            result = {
                 "stdout": stdout,
                 "stderr": stderr,
                 "exit_code": process.returncode,
-                "success": process.returncode == 0
+                "success": process.returncode == 0,
             }
+            if truncated:
+                shown = len(stdout) + len(stderr)
+                result["truncation_notice"] = (
+                    f"[output truncated: showing first {shown} of {combined_len} bytes]"
+                )
+            return result
 
         except asyncio.CancelledError:
             # Kill the subprocess on cancellation
@@ -648,8 +746,13 @@ class ToolExecutor:
                 if title:
                     text = f"# {title.get_text().strip()}\n\n{text}"
                 
+                truncated = len(text) > MAX_WEB_FETCH_CHARS
+                content = text[:MAX_WEB_FETCH_CHARS]
+                if truncated:
+                    content += f"\n[output truncated: showing first {MAX_WEB_FETCH_CHARS} of {len(text)} chars]"
+
                 return {
-                    "content": text[:50000],  # Limit content size
+                    "content": content,
                     "url": url,
                     "success": True
                 }
@@ -831,19 +934,77 @@ class ToolExecutor:
             file_path = alerts_dir / Path(alert_file).name
             if not file_path.exists():
                 return {"error": f"Alert file not found: {alert_file}", "success": False}
-            
+
             text = file_path.read_text(encoding="utf-8")
             new_text = re.sub(r'(\*\*Status:\*\*\s*)\w+', f'\\1{resolution}', text)
             file_path.write_text(new_text, encoding="utf-8")
-            
+
             result = {"message": f"Alert resolved as {resolution}: {file_path.name}", "success": True}
-            
+
             if resolution == "approved":
                 cmd_match = re.search(r'\*\*Fix Command:\*\*\s*`([^`]+)`', text)
                 if cmd_match and cmd_match.group(1) != "N/A":
                     result["fix_command"] = cmd_match.group(1)
                     result["message"] += f"\nFix command available: {cmd_match.group(1)}"
-            
+
             return result
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    # ── Sub-agent tools ─────────────────────────────────────────
+
+    async def _spawn_subagent(
+        self,
+        task: str,
+        label: Optional[str] = None,
+        model: Optional[str] = None,
+        thinking: Optional[str] = None,
+        timeout_seconds: int = 0,
+        cwd: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Spawn an isolated Koi sub-agent."""
+        if self.subagent_manager is None:
+            return {"error": "Sub-agent spawning is not available", "success": False}
+        try:
+            result = await self.subagent_manager.spawn(
+                task=task,
+                label=label,
+                model=model,
+                thinking=thinking,
+                timeout_seconds=timeout_seconds,
+                cwd=cwd,
+            )
+            if result["status"] == "error":
+                return {"error": result["error"], "success": False}
+            return {
+                "message": f"Sub-agent {result['run_id']} started: {task[:80]}",
+                "run_id": result["run_id"],
+                "success": True,
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _list_subagents(self) -> Dict[str, Any]:
+        """List active and completed sub-agents."""
+        if self.subagent_manager is None:
+            return {"error": "Sub-agent spawning is not available", "success": False}
+        try:
+            runs = self.subagent_manager.list_runs()
+            return {"runs": runs, "count": len(runs), "success": True}
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _kill_subagent(self, run_id: str) -> Dict[str, Any]:
+        """Kill a running sub-agent."""
+        if self.subagent_manager is None:
+            return {"error": "Sub-agent spawning is not available", "success": False}
+        try:
+            result = await self.subagent_manager.kill(run_id)
+            if "error" in result:
+                return {"error": result["error"], "success": False}
+            return {
+                "message": f"Sub-agent {run_id} killed.",
+                "success": True,
+            }
         except Exception as e:
             return {"error": str(e), "success": False}
