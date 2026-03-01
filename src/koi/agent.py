@@ -146,10 +146,13 @@ class Agent:
                 if not user_input:
                     continue
 
-                # Handle special commands
+                # Handle special commands (but not file paths like /home/...)
+                _COMMANDS = {'exit', 'quit', 'help', 'memory', 'remember', 'compact', 'skills', 'status', 'stats', 'usage', 'new', 'reset'}
                 if user_input.startswith('/'):
-                    await self._handle_command(user_input)
-                    continue
+                    cmd_word = user_input.split()[0][1:].lower()  # e.g. '/exit' -> 'exit'
+                    if cmd_word in _COMMANDS:
+                        await self._handle_command(user_input)
+                        continue
 
                 # Add user message
                 self.messages.append({
