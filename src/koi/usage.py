@@ -103,6 +103,11 @@ class TokenUsage:
             lines.append(
                 f"  Cache creation: {self.cache_creation_tokens:,} tokens"
             )
+        
+        # Add cache hit ratio if applicable
+        if self.cache_read_tokens > 0 or self.input_tokens > 0:
+            cache_hit_ratio = self.cache_read_tokens / (self.cache_read_tokens + self.input_tokens) * 100 if (self.cache_read_tokens + self.input_tokens) > 0 else 0
+            lines.append(f"  Cache hit:    {cache_hit_ratio:.1f}%")
 
         cost = estimate_cost(
             model,
