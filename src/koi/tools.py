@@ -340,7 +340,8 @@ class ToolExecutor:
         function_name = tool_call["function"]["name"].replace("-", "_")
 
         try:
-            arguments = json.loads(tool_call["function"]["arguments"])
+            raw_args = tool_call["function"].get("arguments", "{}") or "{}"
+            arguments = json.loads(raw_args)
         except json.JSONDecodeError as e:
             return {
                 "error": f"Failed to parse arguments: {e}",
