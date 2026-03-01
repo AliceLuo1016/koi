@@ -383,6 +383,7 @@ class Agent:
                 if not self.llm_client.use_reasoning_tags:
                     if first_token:
                         console.print()  # blank line before response
+                        console.file.write("  ")  # indent agent response
                         first_token = False
                     console.file.write(token)
                     console.file.flush()
