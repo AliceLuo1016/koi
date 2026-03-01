@@ -625,5 +625,7 @@ Just type your requests normally and I'll help you with tasks using available to
         status = "[green]✓[/green]" if run.exit_code == 0 else "[red]✗[/red]"
         console.print(f"\n  {status} Sub-agent [cyan]{label}[/cyan] (id={run.id}) completed")
         if summary:
-            preview = summary[:150].replace("\n", " ")
-            console.print(f"    {preview}", style="dim")
+            for line in summary[:500].splitlines():
+                line = line.strip()
+                if line:
+                    console.print(f"    {line}", style="dim")
