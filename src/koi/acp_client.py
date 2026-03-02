@@ -1,10 +1,13 @@
 """ACP client — spawn and communicate with ACP-compatible coding agents."""
 
+from __future__ import annotations
+
 import asyncio
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TYPE_CHECKING
 
+ACP_AVAILABLE = False
 try:
     import acp
     from acp.client import ClientSideConnection
@@ -34,7 +37,7 @@ try:
     )
     ACP_AVAILABLE = True
 except ImportError:
-    ACP_AVAILABLE = False
+    pass
 
 
 @dataclass
