@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 from uuid import uuid4
 
-from .acp_client import ACPSession, ACPResult
+from .acp_client import ACPSession, ACPResult, ACP_AVAILABLE
 from .acp_registry import get_agent
 
 

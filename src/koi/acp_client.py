@@ -5,32 +5,36 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-import acp
-from acp.client import ClientSideConnection
-from acp.schema import (
-    AgentMessageChunk,
-    AgentThoughtChunk,
-    ToolCallStart,
-    ToolCallProgress,
-    AgentPlanUpdate,
-    UsageUpdate,
-    TextContentBlock,
-    ClientCapabilities,
-    Implementation,
-    RequestPermissionResponse,
-    PermissionOption,
-    AllowedOutcome,
-    DeniedOutcome,
-    ToolCallUpdate,
-    ReadTextFileResponse,
-    WriteTextFileResponse,
-    CreateTerminalResponse,
-    ReleaseTerminalResponse,
-    TerminalOutputResponse,
-    WaitForTerminalExitResponse,
-    KillTerminalCommandResponse,
-    FileSystemCapability,
-)
+try:
+    import acp
+    from acp.client import ClientSideConnection
+    from acp.schema import (
+        AgentMessageChunk,
+        AgentThoughtChunk,
+        ToolCallStart,
+        ToolCallProgress,
+        AgentPlanUpdate,
+        UsageUpdate,
+        TextContentBlock,
+        ClientCapabilities,
+        Implementation,
+        RequestPermissionResponse,
+        PermissionOption,
+        AllowedOutcome,
+        DeniedOutcome,
+        ToolCallUpdate,
+        ReadTextFileResponse,
+        WriteTextFileResponse,
+        CreateTerminalResponse,
+        ReleaseTerminalResponse,
+        TerminalOutputResponse,
+        WaitForTerminalExitResponse,
+        KillTerminalCommandResponse,
+        FileSystemCapability,
+    )
+    ACP_AVAILABLE = True
+except ImportError:
+    ACP_AVAILABLE = False
 
 
 @dataclass
@@ -170,6 +174,11 @@ class ACPSession:
 
         Returns the session_id.
         """
+        if not ACP_AVAILABLE:
+            raise ImportError(
+                "acp-sdk is required for ACP sub-agents. "
+                "Install it with: pip install 'koi[acp]' or pip install acp-sdk"
+            )
         self._client = KoiACPClient(auto_approve=self.auto_approve, cwd=self.cwd)
 
         # Use the SDK's spawn helper
