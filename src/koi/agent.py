@@ -116,6 +116,7 @@ class Agent:
             self._prompt_session = PromptSession(key_bindings=bindings, multiline=True, style=self._prompt_style)
 
         self._pending_subagent_results: List[Dict[str, Any]] = []
+        self._interrupted = False  # Flag-based interrupt (no raise from signal handler)
 
         # System prompt stored separately — never in the messages array.
         # Injected into the API payload at call time by LLMClient.
@@ -168,20 +169,25 @@ class Agent:
                 })
 
                 # Run agent loop as a cancellable task
+                self._interrupted = False
                 self._current_task = asyncio.create_task(self._agent_loop())
                 try:
                     await self._current_task
-                except (asyncio.CancelledError, KeyboardInterrupt):
-                    # Roll back partial messages from the interrupted iteration only;
-                    # completed iterations are preserved.
-                    snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
-                    self.messages = self.messages[:snapshot]
-                    console.print("[dim]Operation cancelled.[/dim]")
+                except asyncio.CancelledError:
+                    pass  # handled below via _interrupted flag
                 finally:
                     # Ensure the background task is cleaned up
                     if self._current_task and not self._current_task.done():
                         self._current_task.cancel()
                     self._current_task = None
+
+                if self._interrupted:
+                    # Roll back partial messages from the interrupted iteration only;
+                    # completed iterations are preserved.
+                    snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
+                    self.messages = self.messages[:snapshot]
+                    console.print("\n[dim]Operation cancelled.[/dim]")
+                    self._interrupted = False
 
         finally:
             signal.signal(signal.SIGINT, prev_handler)
@@ -210,20 +216,25 @@ class Agent:
 
         try:
             # Run agent loop as a cancellable task
+            self._interrupted = False
             self._current_task = asyncio.create_task(
                 self._agent_loop(non_interactive=non_interactive)
             )
             try:
                 await self._current_task
-            except (asyncio.CancelledError, KeyboardInterrupt):
-                snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
-                self.messages = self.messages[:snapshot]
-                if not non_interactive:
-                    console.print("[dim]Operation cancelled.[/dim]")
+            except asyncio.CancelledError:
+                pass
             finally:
                 if self._current_task and not self._current_task.done():
                     self._current_task.cancel()
                 self._current_task = None
+
+            if self._interrupted:
+                snapshot = getattr(self, "_iter_msg_snapshot", len(self.messages))
+                self.messages = self.messages[:snapshot]
+                if not non_interactive:
+                    console.print("\n[dim]Operation cancelled.[/dim]")
+                self._interrupted = False
 
         finally:
             if self.llm_client.usage.total_requests > 0:
@@ -450,6 +461,7 @@ class Agent:
     
     async def _stream_response(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
         """Stream response from LLM and display tokens progressively."""
+        spinner = None
         try:
             collected_text = ""
             first_token = True
@@ -465,6 +477,7 @@ class Agent:
                 if not self.llm_client.use_reasoning_tags:
                     if first_token:
                         spinner.stop()
+                        spinner = None
                         console.print()  # blank line before response
                         console.file.write("  ")  # indent agent response
                         first_token = False
@@ -472,8 +485,9 @@ class Agent:
                     console.file.flush()
 
             # Stop spinner in case no tokens were received, or reasoning-tags mode
-            if first_token:
+            if spinner:
                 spinner.stop()
+                spinner = None
 
             response = self.llm_client._last_stream_response
             if response is None:
@@ -494,9 +508,14 @@ class Agent:
             return response
 
         except asyncio.CancelledError:
+            # Ensure spinner is stopped so terminal isn't left dirty
+            if spinner:
+                spinner.stop()
             raise
 
         except Exception as e:
+            if spinner:
+                spinner.stop()
             raise RuntimeError(f"LLM request failed: {e}")
     
     async def _handle_command(self, command: str):
@@ -686,13 +705,22 @@ Just type your requests normally and I'll help you with tasks using available to
     def _handle_sigint(self, signum, frame):
         """Handle SIGINT (Ctrl+C).
 
-        Always raises KeyboardInterrupt for immediate stack unwinding.
-        If an agent task is running, also cancel it so the background
-        coroutine cleans up (subprocess termination, etc.).
+        Flag-based approach: sets _interrupted and cancels the running task
+        but does NOT raise KeyboardInterrupt.  This avoids the race between
+        KeyboardInterrupt and CancelledError that caused flaky behavior
+        (interrupt landing inside httpx cleanup, Rich spinner, etc.).
+
+        When no agent task is running (i.e. we're at the prompt), we raise
+        KeyboardInterrupt so prompt_toolkit can handle it normally.
         """
         if self._current_task and not self._current_task.done():
+            self._interrupted = True
             self._current_task.cancel()
-        raise KeyboardInterrupt
+            # Also close any active LLM stream to unblock httpx immediately
+            self.llm_client.abort_stream()
+        else:
+            # At the prompt — let prompt_toolkit handle it
+            raise KeyboardInterrupt
 
     async def _on_subagent_complete(self, run) -> None:
         """Callback invoked when a sub-agent finishes."""

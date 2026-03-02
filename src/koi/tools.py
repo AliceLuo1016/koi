@@ -643,13 +643,9 @@ class ToolExecutor:
             return result
 
         except asyncio.CancelledError:
-            # Kill the subprocess on cancellation
+            # Kill the subprocess immediately on Ctrl+C — no grace period
             try:
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=3)
-                except asyncio.TimeoutError:
-                    process.kill()
+                process.kill()
             except (NameError, ProcessLookupError):
                 pass
             raise

@@ -143,6 +143,7 @@ class LLMClient:
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
         self._thinking_disabled_fallback = False
         self._last_stream_response: Optional[Dict[str, Any]] = None
+        self._active_stream_response: Optional[httpx.Response] = None  # for abort on Ctrl+C
         self.usage = TokenUsage()
         self._stream_include_usage = True  # try stream_options.include_usage; disable on error
         self.use_reasoning_tags = uses_reasoning_tags(
@@ -713,84 +714,88 @@ class LLMClient:
         async with self.client.stream(
             "POST", url, headers=self.headers, json=payload
         ) as response:
-            response.raise_for_status()
+            self._active_stream_response = response
+            try:
+                response.raise_for_status()
 
-            full_content = ""
-            tool_calls: Dict[str, Dict[str, Any]] = {}
+                full_content = ""
+                tool_calls: Dict[str, Dict[str, Any]] = {}
 
-            async for line in response.aiter_lines():
-                if not line.strip() or not line.startswith("data: "):
-                    continue
+                async for line in response.aiter_lines():
+                    if not line.strip() or not line.startswith("data: "):
+                        continue
 
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
 
-                try:
-                    data = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
 
-                event_type = data.get("type", "")
+                    event_type = data.get("type", "")
 
-                # Text deltas
-                if event_type == "response.output_text.delta":
-                    full_content += data.get("delta", "")
+                    # Text deltas
+                    if event_type == "response.output_text.delta":
+                        full_content += data.get("delta", "")
 
-                # Tool-call argument deltas
-                elif event_type == "response.function_call_arguments.delta":
-                    cid = data.get("call_id", data.get("item_id", ""))
-                    if cid not in tool_calls:
-                        tool_calls[cid] = {
-                            "id": cid,
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        }
-                    tool_calls[cid]["function"]["arguments"] += data.get(
-                        "delta", ""
-                    )
-
-                # Tool-call name
-                elif event_type in (
-                    "response.function_call.name",
-                    "response.output_item.added",
-                ):
-                    item = data.get("item", data)
-                    if item.get("type") == "function_call":
-                        cid = item.get("call_id", item.get("id", ""))
+                    # Tool-call argument deltas
+                    elif event_type == "response.function_call_arguments.delta":
+                        cid = data.get("call_id", data.get("item_id", ""))
                         if cid not in tool_calls:
                             tool_calls[cid] = {
                                 "id": cid,
                                 "type": "function",
                                 "function": {"name": "", "arguments": ""},
                             }
-                        tool_calls[cid]["function"]["name"] = item.get(
-                            "name", ""
+                        tool_calls[cid]["function"]["arguments"] += data.get(
+                            "delta", ""
                         )
 
-                # Final complete response — parse directly
-                elif event_type == "response.completed":
-                    resp = data.get("response", {})
-                    if resp:
-                        return self._convert_response(resp)
+                    # Tool-call name
+                    elif event_type in (
+                        "response.function_call.name",
+                        "response.output_item.added",
+                    ):
+                        item = data.get("item", data)
+                        if item.get("type") == "function_call":
+                            cid = item.get("call_id", item.get("id", ""))
+                            if cid not in tool_calls:
+                                tool_calls[cid] = {
+                                    "id": cid,
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            tool_calls[cid]["function"]["name"] = item.get(
+                                "name", ""
+                            )
 
-            # Assemble from accumulated deltas (response.completed was not received)
-            # Estimate usage since the provider didn't report it
-            if full_content or tool_calls:
-                estimated_output = len(full_content) // 4 + sum(
-                    len(tc["function"]["arguments"]) // 4 for tc in tool_calls.values()
-                )
-                self.usage.add(input_t=0, output_t=max(estimated_output, 1))
+                    # Final complete response — parse directly
+                    elif event_type == "response.completed":
+                        resp = data.get("response", {})
+                        if resp:
+                            return self._convert_response(resp)
 
-            message: Dict[str, Any] = {"role": "assistant"}
-            if full_content:
-                message["content"] = full_content
-            if tool_calls:
-                message["tool_calls"] = list(tool_calls.values())
+                # Assemble from accumulated deltas (response.completed was not received)
+                # Estimate usage since the provider didn't report it
+                if full_content or tool_calls:
+                    estimated_output = len(full_content) // 4 + sum(
+                        len(tc["function"]["arguments"]) // 4 for tc in tool_calls.values()
+                    )
+                    self.usage.add(input_t=0, output_t=max(estimated_output, 1))
 
-            return {
-                "choices": [{"message": message, "finish_reason": "stop"}]
-            }
+                message: Dict[str, Any] = {"role": "assistant"}
+                if full_content:
+                    message["content"] = full_content
+                if tool_calls:
+                    message["tool_calls"] = list(tool_calls.values())
+
+                return {
+                    "choices": [{"message": message, "finish_reason": "stop"}]
+                }
+            finally:
+                self._active_stream_response = None
 
     async def _stream_chat_completions(
         self, url: str, payload: Dict[str, Any]
@@ -802,13 +807,17 @@ class LLMClient:
                 async with self.client.stream(
                     "POST", url, headers=self.headers, json=payload
                 ) as response:
-                    if response.status_code == 400:
-                        # Provider doesn't support stream_options — disable for this session
-                        self._stream_include_usage = False
-                        payload.pop("stream_options", None)
-                    else:
-                        response.raise_for_status()
-                        return await self._parse_cc_stream(response)
+                    self._active_stream_response = response
+                    try:
+                        if response.status_code == 400:
+                            # Provider doesn't support stream_options — disable for this session
+                            self._stream_include_usage = False
+                            payload.pop("stream_options", None)
+                        else:
+                            response.raise_for_status()
+                            return await self._parse_cc_stream(response)
+                    finally:
+                        self._active_stream_response = None
             except httpx.HTTPStatusError:
                 # Also catch 400 raised as exception
                 self._stream_include_usage = False
@@ -818,8 +827,12 @@ class LLMClient:
         async with self.client.stream(
             "POST", url, headers=self.headers, json=payload
         ) as response:
-            response.raise_for_status()
-            return await self._parse_cc_stream(response)
+            self._active_stream_response = response
+            try:
+                response.raise_for_status()
+                return await self._parse_cc_stream(response)
+            finally:
+                self._active_stream_response = None
 
     async def _parse_cc_stream(self, response: httpx.Response) -> Dict[str, Any]:
         """Parse a Chat Completions SSE stream into a response dict."""
@@ -897,80 +910,84 @@ class LLMClient:
         async with self.client.stream(
             "POST", url, headers=self.headers, json=payload
         ) as response:
-            response.raise_for_status()
+            self._active_stream_response = response
+            try:
+                response.raise_for_status()
 
-            full_content = ""
-            tool_calls: Dict[int, Dict[str, Any]] = {}
-            current_block_idx = -1
-            current_block_type = None
+                full_content = ""
+                tool_calls: Dict[int, Dict[str, Any]] = {}
+                current_block_idx = -1
+                current_block_type = None
 
-            async for line in response.aiter_lines():
-                if not line.strip() or not line.startswith("data: "):
-                    continue
-
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
-
-                try:
-                    data = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
-
-                event_type = data.get("type", "")
-
-                if event_type == "message_start":
-                    msg = data.get("message", {})
-                    if "usage" in msg:
-                        self._extract_usage(msg, "anthropic")
-
-                elif event_type == "message_delta":
-                    if "usage" in data:
-                        self._extract_usage(data, "anthropic")
-
-                elif event_type == "content_block_start":
-                    current_block_idx = data.get("index", 0)
-                    block = data.get("content_block", {})
-                    current_block_type = block.get("type")
-                    if current_block_type == "tool_use":
-                        tool_calls[current_block_idx] = {
-                            "id": block.get("id", ""),
-                            "type": "function",
-                            "function": {
-                                "name": block.get("name", ""),
-                                "arguments": "",
-                            },
-                        }
-
-                elif event_type == "content_block_delta":
-                    delta = data.get("delta", {})
-                    delta_type = delta.get("type")
-                    # Skip thinking deltas
-                    if delta_type == "thinking_delta":
+                async for line in response.aiter_lines():
+                    if not line.strip() or not line.startswith("data: "):
                         continue
-                    if delta_type == "text_delta":
-                        full_content += delta.get("text", "")
-                    elif delta_type == "input_json_delta":
-                        idx = data.get("index", current_block_idx)
-                        if idx in tool_calls:
-                            tool_calls[idx]["function"]["arguments"] += delta.get(
-                                "partial_json", ""
-                            )
 
-                elif event_type == "message_stop":
-                    break
+                    data_str = line[6:]
+                    if data_str.strip() == "[DONE]":
+                        break
 
-            message: Dict[str, Any] = {"role": "assistant"}
-            if full_content:
-                message["content"] = full_content
-            if tool_calls:
-                message["tool_calls"] = [
-                    tool_calls[i] for i in sorted(tool_calls)
-                ]
+                    try:
+                        data = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
 
-            return {
-                "choices": [{"message": message, "finish_reason": "stop"}]
-            }
+                    event_type = data.get("type", "")
+
+                    if event_type == "message_start":
+                        msg = data.get("message", {})
+                        if "usage" in msg:
+                            self._extract_usage(msg, "anthropic")
+
+                    elif event_type == "message_delta":
+                        if "usage" in data:
+                            self._extract_usage(data, "anthropic")
+
+                    elif event_type == "content_block_start":
+                        current_block_idx = data.get("index", 0)
+                        block = data.get("content_block", {})
+                        current_block_type = block.get("type")
+                        if current_block_type == "tool_use":
+                            tool_calls[current_block_idx] = {
+                                "id": block.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name", ""),
+                                    "arguments": "",
+                                },
+                            }
+
+                    elif event_type == "content_block_delta":
+                        delta = data.get("delta", {})
+                        delta_type = delta.get("type")
+                        # Skip thinking deltas
+                        if delta_type == "thinking_delta":
+                            continue
+                        if delta_type == "text_delta":
+                            full_content += delta.get("text", "")
+                        elif delta_type == "input_json_delta":
+                            idx = data.get("index", current_block_idx)
+                            if idx in tool_calls:
+                                tool_calls[idx]["function"]["arguments"] += delta.get(
+                                    "partial_json", ""
+                                )
+
+                    elif event_type == "message_stop":
+                        break
+
+                message: Dict[str, Any] = {"role": "assistant"}
+                if full_content:
+                    message["content"] = full_content
+                if tool_calls:
+                    message["tool_calls"] = [
+                        tool_calls[i] for i in sorted(tool_calls)
+                    ]
+
+                return {
+                    "choices": [{"message": message, "finish_reason": "stop"}]
+                }
+            finally:
+                self._active_stream_response = None
 
     async def stream_chat(
         self,
@@ -1028,62 +1045,66 @@ class LLMClient:
             async with self.client.stream(
                 "POST", url, headers=self.headers, json=payload
             ) as response:
-                response.raise_for_status()
+                self._active_stream_response = response
+                try:
+                    response.raise_for_status()
 
-                async for line in response.aiter_lines():
-                    if not line.strip() or not line.startswith("data: "):
-                        continue
+                    async for line in response.aiter_lines():
+                        if not line.strip() or not line.startswith("data: "):
+                            continue
 
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
 
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
 
-                    event_type = data.get("type", "")
+                        event_type = data.get("type", "")
 
-                    if event_type == "response.output_text.delta":
-                        delta = data.get("delta", "")
-                        full_content += delta
-                        yield delta
+                        if event_type == "response.output_text.delta":
+                            delta = data.get("delta", "")
+                            full_content += delta
+                            yield delta
 
-                    elif event_type == "response.function_call_arguments.delta":
-                        cid = data.get("call_id", data.get("item_id", ""))
-                        if cid not in tool_calls:
-                            tool_calls[cid] = {
-                                "id": cid,
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        tool_calls[cid]["function"]["arguments"] += data.get(
-                            "delta", ""
-                        )
-
-                    elif event_type in (
-                        "response.function_call.name",
-                        "response.output_item.added",
-                    ):
-                        item = data.get("item", data)
-                        if item.get("type") == "function_call":
-                            cid = item.get("call_id", item.get("id", ""))
+                        elif event_type == "response.function_call_arguments.delta":
+                            cid = data.get("call_id", data.get("item_id", ""))
                             if cid not in tool_calls:
                                 tool_calls[cid] = {
                                     "id": cid,
                                     "type": "function",
                                     "function": {"name": "", "arguments": ""},
                                 }
-                            tool_calls[cid]["function"]["name"] = item.get(
-                                "name", ""
+                            tool_calls[cid]["function"]["arguments"] += data.get(
+                                "delta", ""
                             )
 
-                    elif event_type == "response.completed":
-                        resp = data.get("response", {})
-                        if resp:
-                            self._last_stream_response = self._convert_response(resp)
-                            return
+                        elif event_type in (
+                            "response.function_call.name",
+                            "response.output_item.added",
+                        ):
+                            item = data.get("item", data)
+                            if item.get("type") == "function_call":
+                                cid = item.get("call_id", item.get("id", ""))
+                                if cid not in tool_calls:
+                                    tool_calls[cid] = {
+                                        "id": cid,
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""},
+                                    }
+                                tool_calls[cid]["function"]["name"] = item.get(
+                                    "name", ""
+                                )
+
+                        elif event_type == "response.completed":
+                            resp = data.get("response", {})
+                            if resp:
+                                self._last_stream_response = self._convert_response(resp)
+                                return
+                finally:
+                    self._active_stream_response = None
 
         except asyncio.CancelledError:
             raise
@@ -1126,51 +1147,55 @@ class LLMClient:
             async with self.client.stream(
                 "POST", url, headers=self.headers, json=payload
             ) as response:
-                response.raise_for_status()
+                self._active_stream_response = response
+                try:
+                    response.raise_for_status()
 
-                async for line in response.aiter_lines():
-                    if not line.strip() or not line.startswith("data: "):
-                        continue
+                    async for line in response.aiter_lines():
+                        if not line.strip() or not line.startswith("data: "):
+                            continue
 
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
 
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
 
-                    # Extract usage from final chunk
-                    if "usage" in data:
-                        self._extract_usage(data, "chat_completions")
+                        # Extract usage from final chunk
+                        if "usage" in data:
+                            self._extract_usage(data, "chat_completions")
 
-                    choices = data.get("choices", [])
-                    if not choices:
-                        continue
-                    delta = choices[0].get("delta", {})
+                        choices = data.get("choices", [])
+                        if not choices:
+                            continue
+                        delta = choices[0].get("delta", {})
 
-                    if "content" in delta and delta["content"]:
-                        full_content += delta["content"]
-                        yield delta["content"]
+                        if "content" in delta and delta["content"]:
+                            full_content += delta["content"]
+                            yield delta["content"]
 
-                    for tc_delta in delta.get("tool_calls", []):
-                        idx = tc_delta.get("index", 0)
-                        if idx not in tool_calls:
-                            tool_calls[idx] = {
-                                "id": tc_delta.get("id", ""),
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        if tc_delta.get("id"):
-                            tool_calls[idx]["id"] = tc_delta["id"]
-                        func = tc_delta.get("function", {})
-                        if func.get("name"):
-                            tool_calls[idx]["function"]["name"] = func["name"]
-                        if func.get("arguments"):
-                            tool_calls[idx]["function"]["arguments"] += func[
-                                "arguments"
-                            ]
+                        for tc_delta in delta.get("tool_calls", []):
+                            idx = tc_delta.get("index", 0)
+                            if idx not in tool_calls:
+                                tool_calls[idx] = {
+                                    "id": tc_delta.get("id", ""),
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            if tc_delta.get("id"):
+                                tool_calls[idx]["id"] = tc_delta["id"]
+                            func = tc_delta.get("function", {})
+                            if func.get("name"):
+                                tool_calls[idx]["function"]["name"] = func["name"]
+                            if func.get("arguments"):
+                                tool_calls[idx]["function"]["arguments"] += func[
+                                    "arguments"
+                                ]
+                finally:
+                    self._active_stream_response = None
 
         except asyncio.CancelledError:
             raise
@@ -1246,63 +1271,67 @@ class LLMClient:
             async with self.client.stream(
                 "POST", url, headers=self.headers, json=payload
             ) as response:
-                response.raise_for_status()
+                self._active_stream_response = response
+                try:
+                    response.raise_for_status()
 
-                async for line in response.aiter_lines():
-                    if not line.strip() or not line.startswith("data: "):
-                        continue
-
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-
-                    event_type = data.get("type", "")
-
-                    if event_type == "message_start":
-                        msg = data.get("message", {})
-                        if "usage" in msg:
-                            self._extract_usage(msg, "anthropic")
-
-                    elif event_type == "message_delta":
-                        if "usage" in data:
-                            self._extract_usage(data, "anthropic")
-
-                    elif event_type == "content_block_start":
-                        current_block_idx = data.get("index", 0)
-                        block = data.get("content_block", {})
-                        if block.get("type") == "tool_use":
-                            tool_calls[current_block_idx] = {
-                                "id": block.get("id", ""),
-                                "type": "function",
-                                "function": {
-                                    "name": block.get("name", ""),
-                                    "arguments": "",
-                                },
-                            }
-
-                    elif event_type == "content_block_delta":
-                        delta = data.get("delta", {})
-                        delta_type = delta.get("type")
-                        if delta_type == "thinking_delta":
+                    async for line in response.aiter_lines():
+                        if not line.strip() or not line.startswith("data: "):
                             continue
-                        if delta_type == "text_delta":
-                            text = delta.get("text", "")
-                            full_content += text
-                            yield text
-                        elif delta_type == "input_json_delta":
-                            idx = data.get("index", current_block_idx)
-                            if idx in tool_calls:
-                                tool_calls[idx]["function"][
-                                    "arguments"
-                                ] += delta.get("partial_json", "")
 
-                    elif event_type == "message_stop":
-                        break
+                        data_str = line[6:]
+                        if data_str.strip() == "[DONE]":
+                            break
+
+                        try:
+                            data = json.loads(data_str)
+                        except json.JSONDecodeError:
+                            continue
+
+                        event_type = data.get("type", "")
+
+                        if event_type == "message_start":
+                            msg = data.get("message", {})
+                            if "usage" in msg:
+                                self._extract_usage(msg, "anthropic")
+
+                        elif event_type == "message_delta":
+                            if "usage" in data:
+                                self._extract_usage(data, "anthropic")
+
+                        elif event_type == "content_block_start":
+                            current_block_idx = data.get("index", 0)
+                            block = data.get("content_block", {})
+                            if block.get("type") == "tool_use":
+                                tool_calls[current_block_idx] = {
+                                    "id": block.get("id", ""),
+                                    "type": "function",
+                                    "function": {
+                                        "name": block.get("name", ""),
+                                        "arguments": "",
+                                    },
+                                }
+
+                        elif event_type == "content_block_delta":
+                            delta = data.get("delta", {})
+                            delta_type = delta.get("type")
+                            if delta_type == "thinking_delta":
+                                continue
+                            if delta_type == "text_delta":
+                                text = delta.get("text", "")
+                                full_content += text
+                                yield text
+                            elif delta_type == "input_json_delta":
+                                idx = data.get("index", current_block_idx)
+                                if idx in tool_calls:
+                                    tool_calls[idx]["function"][
+                                        "arguments"
+                                    ] += delta.get("partial_json", "")
+
+                        elif event_type == "message_stop":
+                            break
+                finally:
+                    self._active_stream_response = None
 
         except asyncio.CancelledError:
             raise
@@ -1322,6 +1351,20 @@ class LLMClient:
         self._last_stream_response = {
             "choices": [{"message": message, "finish_reason": "stop"}]
         }
+
+    def abort_stream(self):
+        """Abort any in-flight streaming response.
+
+        Called from the SIGINT handler (sync context) to unblock httpx
+        immediately rather than waiting for CancelledError to propagate.
+        """
+        resp = self._active_stream_response
+        if resp is not None:
+            try:
+                resp.close()  # sync close — unblocks the async iterator
+            except Exception:
+                pass
+            self._active_stream_response = None
 
     async def close(self):
         await self.client.aclose()
