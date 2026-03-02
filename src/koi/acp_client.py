@@ -133,7 +133,7 @@ class KoiACPClient:
         return CreateTerminalResponse(terminal_id="unsupported")
 
     async def terminal_output(self, session_id: str, terminal_id: str, **kwargs: Any) -> TerminalOutputResponse:
-        return TerminalOutputResponse(output="")
+        return TerminalOutputResponse(output="", truncated=False)
 
     async def release_terminal(self, session_id: str, terminal_id: str, **kwargs: Any) -> ReleaseTerminalResponse:
         return ReleaseTerminalResponse()

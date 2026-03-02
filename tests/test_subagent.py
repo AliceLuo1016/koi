@@ -1297,3 +1297,168 @@ class TestCleanupCompleted:
         assert "old" not in mgr.active_runs
         assert "new" in mgr.active_runs  # too recent
         assert "active" in mgr.active_runs  # not completed
+
+
+# ── ACP session lifecycle tests ──
+
+
+class TestSpawnACPSession:
+    async def test_unknown_agent(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        result = await mgr.spawn_acp_session(agent_name="nonexistent", label="test")
+        assert result["status"] == "error"
+        assert "Unknown agent" in result["error"]
+
+    async def test_unavailable_agent(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        with patch("koi.subagent.get_agent") as mock_get:
+            agent = MagicMock()
+            agent.is_available.return_value = False
+            agent.check_binary = "fake-binary"
+            mock_get.return_value = agent
+            result = await mgr.spawn_acp_session(agent_name="fake", label="test")
+        assert result["status"] == "error"
+        assert "not installed" in result["error"]
+
+    async def test_depth_guard(self):
+        config = MagicMock()
+        mgr = SubagentManager(config, max_depth=1)
+        mgr._depth = 1
+        result = await mgr.spawn_acp_session(agent_name="claude-code", label="test")
+        assert result["status"] == "error"
+        assert "depth" in result["error"].lower()
+
+    async def test_children_guard(self):
+        config = MagicMock()
+        mgr = SubagentManager(config, max_children=0)
+        result = await mgr.spawn_acp_session(agent_name="claude-code", label="test")
+        assert result["status"] == "error"
+        assert "Max children" in result["error"]
+
+    async def test_label_uniqueness(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        # Add existing session with same label
+        run = SubagentRun(
+            id="existing",
+            task="[session:dup]",
+            label="dup",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["existing"] = run
+        result = await mgr.spawn_acp_session(agent_name="claude-code", label="dup")
+        assert result["status"] == "error"
+        assert "already exists" in result["error"]
+
+
+class TestSendACPSession:
+    async def test_send_acp_not_found(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        result = await mgr.send_acp("nope", "hello")
+        assert "error" in result
+
+    async def test_send_acp_not_acp(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        run = SubagentRun(
+            id="abc",
+            task="[session:test]",
+            label="test",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            harness="koi",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+        result = await mgr.send_acp("abc", "hello")
+        assert "error" in result
+        assert "not an ACP" in result["error"]
+
+    async def test_send_acp_success(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        mock_acp = AsyncMock()
+        mock_acp.send = AsyncMock(return_value=ACPResult(
+            content="Done!", stop_reason="end_turn", tool_calls=[], thoughts=""
+        ))
+        run = SubagentRun(
+            id="abc",
+            task="[acp]",
+            label="acp-test",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            harness="acp",
+            acp_session=mock_acp,
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+        result = await mgr.send_acp("abc", "do stuff")
+        assert result["content"] == "Done!"
+        assert result["type"] == "response"
+
+    async def test_send_acp_timeout_kills(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        mock_acp = AsyncMock()
+        mock_acp.send = AsyncMock(return_value=ACPResult(
+            content="", stop_reason="timeout"
+        ))
+        mock_acp.close = AsyncMock()
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.kill = MagicMock()
+        run = SubagentRun(
+            id="abc",
+            task="[acp]",
+            label="timeout-test",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            harness="acp",
+            acp_session=mock_acp,
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+        result = await mgr.send_acp("abc", "slow task")
+        assert "error" in result
+        assert run.completed is True
+
+    async def test_send_acp_exception_kills(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        mock_acp = AsyncMock()
+        mock_acp.send = AsyncMock(side_effect=RuntimeError("connection lost"))
+        mock_acp.close = AsyncMock()
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0
+        run = SubagentRun(
+            id="abc",
+            task="[acp]",
+            label="err-test",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            harness="acp",
+            acp_session=mock_acp,
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+        result = await mgr.send_acp("abc", "hello")
+        assert "error" in result
+        assert run.completed is True
+
+
+from koi.acp_client import ACPResult

@@ -1315,3 +1315,120 @@ async def test_tool_executor_grep_files_sandbox_blocked():
         }
         result = await executor.execute_tool(tool_call)
         assert result["success"] is False
+
+
+# ── New tool tests ──
+
+
+async def test_spawn_subagent_acp_mode():
+    """spawn_subagent with agent param routes to ACP."""
+    from koi.tools import ToolExecutor
+    mock_sm = AsyncMock()
+    mock_sm.spawn_acp_session = AsyncMock(return_value={
+        "status": "accepted",
+        "run_id": "abc123",
+        "label": "claude-code",
+        "agent": "claude-code",
+    })
+    executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
+    result = await executor._spawn_subagent(agent="claude-code", label="test-cc")
+    assert result["success"] is True
+    assert "ACP" in result["message"]
+    mock_sm.spawn_acp_session.assert_called_once()
+
+
+async def test_spawn_subagent_acp_error():
+    """spawn_subagent ACP error propagates."""
+    from koi.tools import ToolExecutor
+    mock_sm = AsyncMock()
+    mock_sm.spawn_acp_session = AsyncMock(return_value={
+        "status": "error",
+        "error": "not installed",
+    })
+    executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
+    result = await executor._spawn_subagent(agent="codex", label="test")
+    assert result["success"] is False
+    assert "not installed" in result["error"]
+
+
+async def test_spawn_subagent_session_mode():
+    """spawn_subagent with mode=session."""
+    from koi.tools import ToolExecutor
+    mock_sm = AsyncMock()
+    mock_sm.spawn_session = AsyncMock(return_value={
+        "status": "accepted",
+        "run_id": "def456",
+        "label": "my-session",
+    })
+    executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
+    result = await executor._spawn_subagent(mode="session", label="my-session")
+    assert result["success"] is True
+    mock_sm.spawn_session.assert_called_once()
+
+
+async def test_spawn_subagent_session_no_label():
+    """spawn_subagent session mode requires label."""
+    from koi.tools import ToolExecutor
+    executor = ToolExecutor(MagicMock(), MagicMock(), MagicMock())
+    result = await executor._spawn_subagent(mode="session")
+    assert result["success"] is False
+    assert "label" in result["error"]
+
+
+async def test_spawn_subagent_run_no_task():
+    """spawn_subagent run mode requires task."""
+    from koi.tools import ToolExecutor
+    executor = ToolExecutor(MagicMock(), MagicMock(), MagicMock())
+    result = await executor._spawn_subagent(mode="run")
+    assert result["success"] is False
+    assert "task" in result["error"]
+
+
+async def test_send_to_subagent_success():
+    """send_to_subagent routes to manager."""
+    from koi.tools import ToolExecutor
+    mock_sm = AsyncMock()
+    mock_sm.send = AsyncMock(return_value={
+        "type": "response",
+        "content": "Done!",
+        "usage": {},
+    })
+    executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
+    result = await executor._send_to_subagent(target="test", message="do it")
+    assert result["success"] is True
+    assert result["response"] == "Done!"
+
+
+async def test_send_to_subagent_error():
+    """send_to_subagent error propagation."""
+    from koi.tools import ToolExecutor
+    mock_sm = AsyncMock()
+    mock_sm.send = AsyncMock(return_value={"error": "not found"})
+    executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
+    result = await executor._send_to_subagent(target="nope", message="hi")
+    assert result["success"] is False
+
+
+async def test_list_available_agents():
+    """list_available_agents returns agent info."""
+    from koi.tools import ToolExecutor
+    executor = ToolExecutor(MagicMock(), MagicMock(), MagicMock())
+    result = await executor._list_available_agents()
+    assert result["success"] is True
+    assert len(result["agents"]) > 0
+    names = {a["name"] for a in result["agents"]}
+    assert "claude-code" in names
+
+
+async def test_spawn_subagent_no_manager():
+    """spawn_subagent without manager returns error."""
+    from koi.tools import ToolExecutor
+    executor = ToolExecutor(MagicMock(), MagicMock(), None)
+    result = await executor._spawn_subagent(task="test")
+    assert result["success"] is False
+
+    result2 = await executor._send_to_subagent(target="x", message="y")
+    assert result2["success"] is False
+
+from unittest.mock import AsyncMock, MagicMock
+

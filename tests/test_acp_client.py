@@ -89,3 +89,133 @@ class TestACPSession:
         # Should not raise
         await session.kill()
         assert session._process is None
+
+
+# ── More coverage tests ──
+
+
+class TestSessionUpdateThoughts:
+    async def test_thought_chunk(self):
+        from koi.acp_client import AgentThoughtChunk
+        client = KoiACPClient()
+        chunk = MagicMock(spec=AgentThoughtChunk)
+        chunk.content = MagicMock()
+        chunk.content.text = "I'm thinking..."
+        await client.session_update(session_id="s1", update=chunk)
+        assert client._collected_thoughts == "I'm thinking..."
+
+
+class TestSessionUpdateToolCalls:
+    async def test_tool_call_start(self):
+        from koi.acp_client import ToolCallStart
+        client = KoiACPClient()
+        tc = MagicMock(spec=ToolCallStart)
+        tc.tool_call_id = "tc1"
+        tc.title = "Read file"
+        tc.status = "pending"
+        await client.session_update(session_id="s1", update=tc)
+        assert len(client._tool_calls) == 1
+        assert client._tool_calls[0]["title"] == "Read file"
+
+    async def test_tool_call_progress(self):
+        from koi.acp_client import ToolCallProgress
+        client = KoiACPClient()
+        tc = MagicMock(spec=ToolCallProgress)
+        tc.tool_call_id = "tc1"
+        tc.title = "Writing"
+        tc.status = "in_progress"
+        await client.session_update(session_id="s1", update=tc)
+        assert len(client._tool_calls) == 1
+
+
+class TestSessionUpdateUsage:
+    async def test_usage_update(self):
+        from koi.acp_client import UsageUpdate
+        client = KoiACPClient()
+        u = MagicMock(spec=UsageUpdate)
+        u.usage = {"input_tokens": 100, "output_tokens": 50}
+        await client.session_update(session_id="s1", update=u)
+        assert client._usage == {"input_tokens": 100, "output_tokens": 50}
+
+    async def test_usage_update_non_dict(self):
+        from koi.acp_client import UsageUpdate
+        client = KoiACPClient()
+        u = MagicMock(spec=UsageUpdate)
+        u.usage = MagicMock()  # not a dict
+        u.usage.__class__ = type("NotDict", (), {})
+        await client.session_update(session_id="s1", update=u)
+        assert client._usage == {}
+
+
+class TestWriteTextFile:
+    async def test_write_success(self, tmp_path):
+        client = KoiACPClient()
+        path = str(tmp_path / "out.txt")
+        await client.write_text_file("hello", path, session_id="s1")
+        assert open(path).read() == "hello"
+
+    async def test_write_failure(self):
+        client = KoiACPClient()
+        # Write to invalid path
+        resp = await client.write_text_file("x", "/nonexistent/dir/file.txt", session_id="s1")
+        # Should not raise, returns empty response
+
+
+class TestTerminalMethods:
+    async def test_create_terminal(self):
+        client = KoiACPClient()
+        resp = await client.create_terminal("bash", session_id="s1")
+        assert resp.terminal_id == "unsupported"
+
+    async def test_terminal_output(self):
+        client = KoiACPClient()
+        resp = await client.terminal_output(session_id="s1", terminal_id="t1")
+        assert resp.output == ""
+
+    async def test_release_terminal(self):
+        client = KoiACPClient()
+        resp = await client.release_terminal(session_id="s1", terminal_id="t1")
+        assert resp is not None
+
+    async def test_wait_for_terminal_exit(self):
+        client = KoiACPClient()
+        resp = await client.wait_for_terminal_exit(session_id="s1", terminal_id="t1")
+        assert resp.exit_code == 1
+
+    async def test_kill_terminal(self):
+        client = KoiACPClient()
+        resp = await client.kill_terminal_command(session_id="s1", terminal_id="t1")
+        assert resp is not None
+
+
+class TestACPSessionClose:
+    async def test_close_without_start(self):
+        session = ACPSession(command=["test"])
+        await session.close()  # should not raise
+
+    async def test_close_with_live_process(self):
+        session = ACPSession(command=["test"])
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.kill = MagicMock()
+        session._process = mock_proc
+        session._ctx = None
+        await session.close()
+        mock_proc.kill.assert_called_once()
+
+    async def test_is_alive_false_after_kill(self):
+        session = ACPSession(command=["test"])
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.kill = MagicMock()
+        session._process = mock_proc
+        await session.kill()
+        assert session.is_alive is False
+
+
+class TestRequestPermissionEmpty:
+    async def test_auto_approve_empty_options(self):
+        client = KoiACPClient(auto_approve=True)
+        from koi.acp_client import DeniedOutcome
+        resp = await client.request_permission(options=[], session_id="s1", tool_call=MagicMock())
+        assert resp.outcome.outcome == "cancelled"
