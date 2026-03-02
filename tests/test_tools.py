@@ -69,7 +69,7 @@ def test_tool_names():
 
 
 def test_all_tool_names_present():
-    """Verify all 20 tools are defined."""
+    """Verify all 22 tools are defined."""
     tools = get_tool_definitions()
     tool_names = {tool["function"]["name"] for tool in tools}
     expected = {
@@ -93,6 +93,8 @@ def test_all_tool_names_present():
         "spawn_subagent",
         "list_subagents",
         "kill_subagent",
+        "send_to_subagent",
+        "list_available_agents",
     }
     assert tool_names == expected
 

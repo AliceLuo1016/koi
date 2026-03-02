@@ -144,6 +144,7 @@ class LLMClient:
         self._thinking_disabled_fallback = False
         self._last_stream_response: Optional[Dict[str, Any]] = None
         self.usage = TokenUsage()
+        self._stream_include_usage = True  # try stream_options.include_usage; disable on error
         self.use_reasoning_tags = uses_reasoning_tags(
             config.model, config.api_format, config.thinking_level
         )
@@ -337,6 +338,8 @@ class LLMClient:
             payload["tools"] = tools  # already in CC format
         if stream:
             payload["stream"] = True
+            if self._stream_include_usage:
+                payload["stream_options"] = {"include_usage": True}
         # Add reasoning_effort for Chat Completions providers (only if model supports it)
         if self._should_send_thinking():
             effort = _CC_REASONING_EFFORT.get(self.config.thinking_level)
@@ -771,7 +774,14 @@ class LLMClient:
                     if resp:
                         return self._convert_response(resp)
 
-            # Assemble from accumulated deltas
+            # Assemble from accumulated deltas (response.completed was not received)
+            # Estimate usage since the provider didn't report it
+            if full_content or tool_calls:
+                estimated_output = len(full_content) // 4 + sum(
+                    len(tc["function"]["arguments"]) // 4 for tc in tool_calls.values()
+                )
+                self.usage.add(input_t=0, output_t=max(estimated_output, 1))
+
             message: Dict[str, Any] = {"role": "assistant"}
             if full_content:
                 message["content"] = full_content
@@ -786,68 +796,99 @@ class LLMClient:
         self, url: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Handle Chat Completions streaming and return assembled result."""
+        # Try with stream_options first; if provider rejects (400), disable and retry
+        if self._stream_include_usage and payload.get("stream_options"):
+            try:
+                async with self.client.stream(
+                    "POST", url, headers=self.headers, json=payload
+                ) as response:
+                    if response.status_code == 400:
+                        # Provider doesn't support stream_options — disable for this session
+                        self._stream_include_usage = False
+                        payload.pop("stream_options", None)
+                    else:
+                        response.raise_for_status()
+                        return await self._parse_cc_stream(response)
+            except httpx.HTTPStatusError:
+                # Also catch 400 raised as exception
+                self._stream_include_usage = False
+                payload.pop("stream_options", None)
+
+        # Retry (or first attempt) without stream_options
         async with self.client.stream(
             "POST", url, headers=self.headers, json=payload
         ) as response:
             response.raise_for_status()
+            return await self._parse_cc_stream(response)
 
-            full_content = ""
-            tool_calls: Dict[int, Dict[str, Any]] = {}
+    async def _parse_cc_stream(self, response: httpx.Response) -> Dict[str, Any]:
+        """Parse a Chat Completions SSE stream into a response dict."""
+        full_content = ""
+        tool_calls: Dict[int, Dict[str, Any]] = {}
+        usage_found = False
 
-            async for line in response.aiter_lines():
-                if not line.strip() or not line.startswith("data: "):
-                    continue
+        async for line in response.aiter_lines():
+            if not line.strip() or not line.startswith("data: "):
+                continue
 
-                data_str = line[6:]
-                if data_str.strip() == "[DONE]":
-                    break
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
 
-                try:
-                    data = json.loads(data_str)
-                except json.JSONDecodeError:
-                    continue
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
 
-                # Extract usage from final chunk
-                if "usage" in data:
-                    self._extract_usage(data, "chat_completions")
+            # Extract usage from final chunk
+            if "usage" in data:
+                self._extract_usage(data, "chat_completions")
+                usage_found = True
 
-                choices = data.get("choices", [])
-                if not choices:
-                    continue
-                delta = choices[0].get("delta", {})
+            choices = data.get("choices", [])
+            if not choices:
+                continue
+            delta = choices[0].get("delta", {})
 
-                # Text content
-                if "content" in delta and delta["content"]:
-                    full_content += delta["content"]
+            # Text content
+            if "content" in delta and delta["content"]:
+                full_content += delta["content"]
 
-                # Tool calls
-                for tc_delta in delta.get("tool_calls", []):
-                    idx = tc_delta.get("index", 0)
-                    if idx not in tool_calls:
-                        tool_calls[idx] = {
-                            "id": tc_delta.get("id", ""),
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        }
-                    if tc_delta.get("id"):
-                        tool_calls[idx]["id"] = tc_delta["id"]
-                    func = tc_delta.get("function", {})
-                    if func.get("name"):
-                        tool_calls[idx]["function"]["name"] = func["name"]
-                    if func.get("arguments"):
-                        tool_calls[idx]["function"]["arguments"] += func["arguments"]
+            # Tool calls
+            for tc_delta in delta.get("tool_calls", []):
+                idx = tc_delta.get("index", 0)
+                if idx not in tool_calls:
+                    tool_calls[idx] = {
+                        "id": tc_delta.get("id", ""),
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                if tc_delta.get("id"):
+                    tool_calls[idx]["id"] = tc_delta["id"]
+                func = tc_delta.get("function", {})
+                if func.get("name"):
+                    tool_calls[idx]["function"]["name"] = func["name"]
+                if func.get("arguments"):
+                    tool_calls[idx]["function"]["arguments"] += func["arguments"]
 
-            message: Dict[str, Any] = {"role": "assistant"}
-            if full_content:
-                message["content"] = full_content
-            if tool_calls:
-                message["tool_calls"] = [
-                    tool_calls[i] for i in sorted(tool_calls)
-                ]
+        # Fallback: estimate usage from content length if provider didn't report it
+        if not usage_found and (full_content or tool_calls):
+            estimated_output = len(full_content) // 4 + sum(
+                len(tc["function"]["arguments"]) // 4 for tc in tool_calls.values()
+            )
+            self.usage.add(input_t=0, output_t=max(estimated_output, 1))
 
-            return {
-                "choices": [{"message": message, "finish_reason": "stop"}]
-            }
+        message: Dict[str, Any] = {"role": "assistant"}
+        if full_content:
+            message["content"] = full_content
+        if tool_calls:
+            message["tool_calls"] = [
+                tool_calls[i] for i in sorted(tool_calls)
+            ]
+
+        return {
+            "choices": [{"message": message, "finish_reason": "stop"}]
+        }
 
     async def _stream_anthropic(
         self, url: str, payload: Dict[str, Any]

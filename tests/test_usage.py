@@ -420,3 +420,202 @@ class TestUsageCommand:
         captured = capsys.readouterr().out
         assert "1,000" in captured
         assert "500" in captured
+
+
+# ── get_usage_history tests ──
+
+
+class TestGetUsageHistory:
+    def test_no_log_file(self):
+        with TemporaryDirectory() as tmp:
+            result = get_usage_history(Path(tmp))
+            assert "No usage history" in result
+
+    def test_empty_log_file(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "usage-log.jsonl"
+            log_path.write_text("")
+            result = get_usage_history(Path(tmp))
+            assert "No usage in the past" in result
+
+    def test_single_entry(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "usage-log.jsonl"
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "model": "test-model",
+                "session_tokens": {
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                },
+                "estimated_cost": 0.05,
+            }
+            log_path.write_text(json.dumps(entry) + "\n")
+            result = get_usage_history(Path(tmp), days=7)
+            assert "Sessions: 1" in result
+            assert "1,000" in result
+            assert "500" in result
+            assert "1,500" in result  # total
+            assert "$0.0500" in result
+
+    def test_old_entries_excluded(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "usage-log.jsonl"
+            from datetime import timedelta
+            old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+            entry = {
+                "timestamp": old_ts,
+                "model": "test-model",
+                "session_tokens": {"input_tokens": 1000, "output_tokens": 500},
+                "estimated_cost": 0.0,
+            }
+            log_path.write_text(json.dumps(entry) + "\n")
+            result = get_usage_history(Path(tmp), days=7)
+            assert "No usage in the past 7 days" in result
+
+    def test_cache_fields(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "usage-log.jsonl"
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "model": "test-model",
+                "session_tokens": {
+                    "input_tokens": 1000,
+                    "output_tokens": 500,
+                    "cache_read_tokens": 200,
+                    "cache_creation_tokens": 100,
+                },
+                "estimated_cost": 0.0,
+            }
+            log_path.write_text(json.dumps(entry) + "\n")
+            result = get_usage_history(Path(tmp))
+            assert "Cache read" in result
+            assert "200" in result
+            assert "Cache creation" in result
+            assert "Cache hit" in result
+
+    def test_malformed_entries_skipped(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "usage-log.jsonl"
+            lines = [
+                "not valid json\n",
+                json.dumps({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "model": "m",
+                    "session_tokens": {"input_tokens": 100, "output_tokens": 50},
+                    "estimated_cost": 0.0,
+                }) + "\n",
+                json.dumps({"bad": "entry"}) + "\n",  # missing timestamp
+            ]
+            log_path.write_text("".join(lines))
+            result = get_usage_history(Path(tmp))
+            assert "Sessions: 1" in result
+
+    def test_multiple_sessions(self):
+        with TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "usage-log.jsonl"
+            entries = []
+            for i in range(3):
+                entries.append(json.dumps({
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "model": "test-model",
+                    "session_tokens": {"input_tokens": 100, "output_tokens": 50},
+                    "estimated_cost": 0.01,
+                }))
+            log_path.write_text("\n".join(entries) + "\n")
+            result = get_usage_history(Path(tmp))
+            assert "Sessions: 3" in result
+            assert "300" in result  # total input
+            assert "$0.0300" in result
+
+
+# ── Streaming fallback usage estimation tests ──
+
+
+class TestStreamingFallbackUsage:
+    """Test that usage is estimated when provider doesn't report it."""
+
+    async def test_cc_stream_fallback_estimation(self):
+        """Chat Completions stream without usage → estimated from content."""
+        client = _make_client("chat_completions")
+        client._stream_include_usage = False  # simulate provider doesn't support it
+        lines = [
+            'data: {"choices":[{"delta":{"content":"Hello world"}}]}',
+            "data: [DONE]",
+        ]
+
+        with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
+            result = await client._parse_cc_stream(
+                _MockStreamResponse(lines)
+            )
+
+        # Should have estimated output tokens (len("Hello world") // 4 = 2)
+        assert client.usage.output_tokens >= 1
+        assert client.usage.total_requests == 1
+
+    async def test_cc_stream_with_usage_no_fallback(self):
+        """Chat Completions stream with usage → no estimation needed."""
+        client = _make_client("chat_completions")
+        lines = [
+            'data: {"choices":[{"delta":{"content":"hi"}}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50}}',
+            "data: [DONE]",
+        ]
+
+        with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
+            result = await client._parse_cc_stream(
+                _MockStreamResponse(lines)
+            )
+
+        assert client.usage.input_tokens == 100
+        assert client.usage.output_tokens == 50
+
+    async def test_responses_stream_fallback_estimation(self):
+        """Responses API stream without response.completed → estimated."""
+        client = _make_client("responses")
+        lines = [
+            'data: {"type":"response.output_text.delta","delta":"Hello there!"}',
+            "data: [DONE]",
+        ]
+
+        with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
+            result = await client._stream_chat(
+                "https://api.example.com/v1/responses", {}
+            )
+
+        # No response.completed → fallback estimation
+        assert client.usage.output_tokens >= 1
+        assert client.usage.total_requests == 1
+
+    async def test_cc_stream_options_disable_on_400(self):
+        """stream_options disabled for session after 400 error."""
+        client = _make_client("chat_completions")
+        assert client._stream_include_usage is True
+
+        # First call: 400 error with stream_options, then retry succeeds
+        call_count = 0
+
+        def mock_stream(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            payload = kwargs.get("json", args[2] if len(args) > 2 else {})
+            if call_count == 1 and "stream_options" in payload:
+                return _StreamCtx([], status_code=400)
+            return _StreamCtx([
+                'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                "data: [DONE]",
+            ])
+
+        with patch.object(client.client, "stream", side_effect=mock_stream):
+            payload = {"model": "test", "stream": True, "stream_options": {"include_usage": True}}
+            result = await client._stream_chat_completions(
+                "https://api.example.com/v1/chat/completions", payload
+            )
+
+        assert client._stream_include_usage is False
+        assert "stream_options" not in payload
+
+
+# ── Import get_usage_history ──
+from koi.usage import get_usage_history
+from datetime import datetime, timezone

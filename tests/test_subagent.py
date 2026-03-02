@@ -818,3 +818,278 @@ async def test_get_result_unknown_returns_none():
     config = _make_config()
     mgr = SubagentManager(config)
     assert mgr.get_result("unknown") is None
+
+
+# ── Persistent subagent tests ──
+
+
+class TestSpawnSession:
+    async def test_spawn_session_creates_run(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        with patch("koi.subagent.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.stderr = MagicMock()
+            mock_exec.return_value = mock_proc
+
+            # Patch idle watcher to not actually run
+            with patch.object(mgr, "_idle_watcher", new_callable=AsyncMock):
+                result = await mgr.spawn_session(label="test-session")
+
+        assert result["status"] == "accepted"
+        assert result["label"] == "test-session"
+        assert "run_id" in result
+        run = mgr.active_runs[result["run_id"]]
+        assert run.mode == "session"
+        assert run.label == "test-session"
+        assert run.last_activity is not None
+
+    async def test_spawn_session_label_uniqueness(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        with patch("koi.subagent.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.stderr = MagicMock()
+            mock_exec.return_value = mock_proc
+
+            with patch.object(mgr, "_idle_watcher", new_callable=AsyncMock):
+                r1 = await mgr.spawn_session(label="dup")
+                r2 = await mgr.spawn_session(label="dup")
+
+        assert r1["status"] == "accepted"
+        assert r2["status"] == "error"
+        assert "already exists" in r2["error"]
+
+    async def test_spawn_session_depth_guard(self):
+        config = MagicMock()
+        mgr = SubagentManager(config, max_depth=2)
+        mgr._depth = 2
+        result = await mgr.spawn_session(label="deep")
+        assert result["status"] == "error"
+        assert "depth" in result["error"].lower()
+
+    async def test_spawn_session_children_guard(self):
+        config = MagicMock()
+        mgr = SubagentManager(config, max_children=1)
+
+        with patch("koi.subagent.asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = MagicMock()
+            mock_proc.stderr = MagicMock()
+            mock_exec.return_value = mock_proc
+
+            with patch.object(mgr, "_idle_watcher", new_callable=AsyncMock):
+                await mgr.spawn_session(label="first")
+                result = await mgr.spawn_session(label="second")
+
+        assert result["status"] == "error"
+        assert "Max children" in result["error"]
+
+
+class TestSendToSubagent:
+    async def test_send_success(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        # Create a fake session run
+        mock_proc = AsyncMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdin.write = MagicMock()
+        mock_proc.stdin.drain = AsyncMock()
+        response_json = json.dumps({"type": "response", "content": "Done!", "usage": {}})
+        mock_proc.stdout = MagicMock()
+        mock_proc.stdout.readline = AsyncMock(return_value=(response_json + "\n").encode())
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:test]",
+            label="test",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        result = await mgr.send("test", "do something")
+        assert result["type"] == "response"
+        assert result["content"] == "Done!"
+        mock_proc.stdin.write.assert_called_once()
+
+    async def test_send_not_found(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+        result = await mgr.send("nonexistent", "hello")
+        assert "error" in result
+
+    async def test_send_to_completed_session_by_label(self):
+        """Label lookup skips completed sessions → 'not found'."""
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:done]",
+            label="done",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            completed=True,
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        result = await mgr.send("done", "hello")
+        assert "error" in result
+
+    async def test_send_to_completed_session_by_id(self):
+        """ID lookup finds completed session → 'has ended'."""
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:done]",
+            label="done",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            completed=True,
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        result = await mgr.send("abc", "hello")
+        assert "error" in result
+        assert "ended" in result["error"]
+
+    async def test_send_to_oneshot_run(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        run = SubagentRun(
+            id="abc",
+            task="one-shot",
+            label="runner",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="run",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        # Use ID to find it (label lookup skips non-session runs)
+        result = await mgr.send("abc", "hello")
+        assert "error" in result
+        assert "not a persistent" in result["error"].lower()
+
+    async def test_send_broken_pipe(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        mock_proc = MagicMock()
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdin.write = MagicMock(side_effect=BrokenPipeError)
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:broken]",
+            label="broken",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        result = await mgr.send("broken", "hello")
+        assert "error" in result
+        assert run.completed is True
+
+
+class TestFindSession:
+    def test_find_by_label(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:my-session]",
+            label="my-session",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        assert mgr._find_session("my-session") is run
+        assert mgr._find_session("abc") is run
+        assert mgr._find_session("nonexistent") is None
+
+    def test_find_skips_completed(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:old]",
+            label="old",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            completed=True,
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        # ID lookup still works (returns the run even if completed)
+        assert mgr._find_session("abc") is run
+        # Label lookup skips completed
+        assert mgr._find_session("old") is None
+
+
+class TestListRunsWithSessions:
+    def test_includes_session_info(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:test]",
+            label="test",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        runs = mgr.list_runs()
+        assert len(runs) == 1
+        assert runs[0]["mode"] == "session"
+        assert "idle_seconds" in runs[0]
+
+
+# Import needed for new tests
+import json
+from datetime import datetime
+from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
+
+from koi.subagent import SubagentManager, SubagentRun

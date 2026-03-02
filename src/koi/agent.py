@@ -230,6 +230,83 @@ class Agent:
                 log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
             await self.llm_client.close()
 
+    async def run_pipe_mode(self):
+        """Run in pipe mode: read JSON messages from stdin, write JSON responses to stdout.
+
+        Used by persistent subagent sessions. The parent process communicates
+        via newline-delimited JSON on stdin/stdout.
+
+        Input:  {"type": "message", "content": "do X"}
+        Output: {"type": "response", "content": "Done.", "usage": {...}}
+        Shutdown: {"type": "shutdown"} or EOF on stdin
+        """
+        import sys
+
+        tools = get_tool_definitions()
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        await asyncio.get_event_loop().connect_read_pipe(lambda: protocol, sys.stdin)
+
+        while True:
+            line = await reader.readline()
+            if not line:
+                break  # EOF
+
+            line = line.decode("utf-8", errors="replace").strip()
+            if not line:
+                continue
+
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                self._pipe_write({"type": "error", "error": "Invalid JSON"})
+                continue
+
+            if msg.get("type") == "shutdown":
+                break
+
+            if msg.get("type") != "message":
+                self._pipe_write({"type": "error", "error": f"Unknown message type: {msg.get('type')}"})
+                continue
+
+            user_content = msg.get("content", "")
+            if not user_content:
+                self._pipe_write({"type": "error", "error": "Empty message"})
+                continue
+
+            # Add user message and run agent loop
+            self.messages.append({"role": "user", "content": user_content})
+
+            try:
+                await self._agent_loop(non_interactive=True)
+            except Exception as e:
+                self._pipe_write({"type": "error", "error": str(e)})
+                continue
+
+            # Extract the last assistant message as the response
+            response_text = ""
+            for m in reversed(self.messages):
+                if m.get("role") == "assistant" and m.get("content"):
+                    response_text = m["content"]
+                    break
+
+            self._pipe_write({
+                "type": "response",
+                "content": response_text,
+                "usage": self.llm_client.usage.to_dict(),
+            })
+
+        # Cleanup
+        if self.llm_client.usage.total_requests > 0:
+            log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
+        await self.llm_client.close()
+
+    def _pipe_write(self, data: dict):
+        """Write a JSON line to stdout for pipe mode communication."""
+        import sys
+        sys.stdout.write(json.dumps(data) + "\n")
+        sys.stdout.flush()
+
     async def _agent_loop(self, non_interactive: bool = False):
         """Main agent thinking loop."""
         tools = get_tool_definitions()
@@ -377,17 +454,26 @@ class Agent:
             collected_text = ""
             first_token = True
 
+            # Show spinner while waiting for first token
+            spinner = console.status("  [dim]Thinking...[/dim]", spinner="dots")
+            spinner.start()
+
             async for token in self.llm_client.stream_chat(
                 messages, tools=tools, system_prompt=self.system_prompt
             ):
                 collected_text += token
                 if not self.llm_client.use_reasoning_tags:
                     if first_token:
+                        spinner.stop()
                         console.print()  # blank line before response
                         console.file.write("  ")  # indent agent response
                         first_token = False
                     console.file.write(token)
                     console.file.flush()
+
+            # Stop spinner in case no tokens were received, or reasoning-tags mode
+            if first_token:
+                spinner.stop()
 
             response = self.llm_client._last_stream_response
             if response is None:

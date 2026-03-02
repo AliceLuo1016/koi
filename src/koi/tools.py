@@ -282,12 +282,14 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
             "type": "function",
             "function": {
                 "name": "spawn_subagent",
-                "description": "Spawn an isolated Koi sub-agent to run a task in the background. Returns a run_id to track progress.",
+                "description": "Spawn a Koi sub-agent. mode='run' (default) runs a one-shot task. mode='session' starts a persistent session you can send follow-up messages to.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "task": {"type": "string", "description": "Natural language task for the sub-agent to execute"},
-                        "label": {"type": "string", "description": "Short label for display purposes"},
+                        "task": {"type": "string", "description": "Natural language task for the sub-agent to execute (required for mode=run, ignored for mode=session)"},
+                        "label": {"type": "string", "description": "Short label for display/addressing (required for mode=session)"},
+                        "mode": {"type": "string", "enum": ["run", "session"], "description": "run=one-shot task, session=persistent (default: run)"},
+                        "agent": {"type": "string", "description": "Agent to use: koi (default, native), claude-code, codex, gemini, opencode, goose (any ACP agent)"},
                         "model": {"type": "string", "description": "Override model for this sub-agent"},
                         "thinking": {"type": "string", "description": "Thinking level for sub-agent (off/minimal/low/medium/high)"},
                         "timeout_seconds": {"type": "integer", "description": "Kill sub-agent after this many seconds (0 = no timeout)"},
@@ -320,6 +322,33 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                         "run_id": {"type": "string", "description": "The run ID of the sub-agent to kill"}
                     },
                     "required": ["run_id"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "send_to_subagent",
+                "description": "Send a follow-up message to a persistent subagent session and get its response.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "target": {"type": "string", "description": "Label or run_id of the persistent session"},
+                        "message": {"type": "string", "description": "Message to send to the subagent"}
+                    },
+                    "required": ["target", "message"]
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "list_available_agents",
+                "description": "List ACP-compatible agents installed on this system (claude-code, codex, gemini, etc.).",
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
                 }
             }
         }
@@ -389,6 +418,10 @@ class ToolExecutor:
                 return await self._list_subagents(**arguments)
             elif function_name == "kill_subagent":
                 return await self._kill_subagent(**arguments)
+            elif function_name == "send_to_subagent":
+                return await self._send_to_subagent(**arguments)
+            elif function_name == "list_available_agents":
+                return await self._list_available_agents()
             else:
                 return {
                     "error": f"Unknown function: {function_name}",
@@ -956,30 +989,98 @@ class ToolExecutor:
 
     async def _spawn_subagent(
         self,
-        task: str,
+        task: str = "",
         label: Optional[str] = None,
+        mode: str = "run",
+        agent: str = "koi",
         model: Optional[str] = None,
         thinking: Optional[str] = None,
         timeout_seconds: int = 0,
         cwd: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Spawn an isolated Koi sub-agent."""
+        """Spawn a sub-agent (native koi or ACP agent)."""
         if self.subagent_manager is None:
             return {"error": "Sub-agent spawning is not available", "success": False}
         try:
-            result = await self.subagent_manager.spawn(
-                task=task,
-                label=label,
-                model=model,
-                thinking=thinking,
-                timeout_seconds=timeout_seconds,
-                cwd=cwd,
-            )
-            if result["status"] == "error":
+            # ACP agents (anything other than "koi")
+            if agent != "koi":
+                if not label:
+                    label = agent
+                result = await self.subagent_manager.spawn_acp_session(
+                    agent_name=agent, label=label, cwd=cwd,
+                )
+                if result["status"] == "error":
+                    return {"error": result["error"], "success": False}
+                return {
+                    "message": f"ACP session '{label}' started with {agent} (id={result['run_id']}). Use send_to_subagent to communicate.",
+                    "run_id": result["run_id"],
+                    "label": label,
+                    "agent": agent,
+                    "success": True,
+                }
+
+            # Native koi: session mode
+            if mode == "session":
+                if not label:
+                    return {"error": "label is required for mode=session", "success": False}
+                result = await self.subagent_manager.spawn_session(
+                    label=label, model=model, thinking=thinking, cwd=cwd,
+                )
+                if result["status"] == "error":
+                    return {"error": result["error"], "success": False}
+                return {
+                    "message": f"Persistent session '{label}' started (id={result['run_id']}). Use send_to_subagent to communicate.",
+                    "run_id": result["run_id"],
+                    "label": label,
+                    "success": True,
+                }
+            else:
+                if not task:
+                    return {"error": "task is required for mode=run", "success": False}
+                result = await self.subagent_manager.spawn(
+                    task=task, label=label, model=model, thinking=thinking,
+                    timeout_seconds=timeout_seconds, cwd=cwd,
+                )
+                if result["status"] == "error":
+                    return {"error": result["error"], "success": False}
+                return {
+                    "message": f"Sub-agent {result['run_id']} started: {task[:80]}",
+                    "run_id": result["run_id"],
+                    "success": True,
+                }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _send_to_subagent(self, target: str, message: str) -> Dict[str, Any]:
+        """Send a message to a persistent subagent session."""
+        if self.subagent_manager is None:
+            return {"error": "Sub-agent spawning is not available", "success": False}
+        try:
+            result = await self.subagent_manager.send(target, message)
+            if "error" in result:
                 return {"error": result["error"], "success": False}
             return {
-                "message": f"Sub-agent {result['run_id']} started: {task[:80]}",
-                "run_id": result["run_id"],
+                "response": result.get("content", ""),
+                "usage": result.get("usage"),
+                "success": True,
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _list_available_agents(self) -> Dict[str, Any]:
+        """List available ACP agents."""
+        from .acp_registry import list_agents
+        try:
+            agents = list_agents()
+            return {
+                "agents": [
+                    {
+                        "name": a.name,
+                        "display_name": a.display_name,
+                        "available": a.is_available(),
+                    }
+                    for a in agents
+                ],
                 "success": True,
             }
         except Exception as e:

@@ -644,12 +644,18 @@ def switch():
     default=None,
     help="Override the model from config"
 )
+@click.option(
+    "--pipe",
+    is_flag=True,
+    help="Run in pipe mode for persistent subagent sessions (JSON on stdin/stdout)"
+)
 def run(
     task: Optional[str],
     non_interactive: bool,
     thinking: Optional[str],
     result_file: Optional[str],
     model_override: Optional[str],
+    pipe: bool,
 ):
     """Start an interactive agent session or run a specific task."""
     try:
@@ -659,9 +665,12 @@ def run(
         if model_override is not None:
             config.model = model_override
 
-        agent = Agent(config, non_interactive=non_interactive or bool(task))
+        agent = Agent(config, non_interactive=non_interactive or bool(task) or pipe)
 
-        if task:
+        if pipe:
+            # Persistent subagent pipe mode
+            asyncio.run(agent.run_pipe_mode())
+        elif task:
             # Run specific task and exit
             asyncio.run(
                 _run_task(agent, task, non_interactive, result_file)

@@ -10,6 +10,9 @@ from pathlib import Path
 from typing import Any, Callable, Coroutine, Dict, List, Optional
 from uuid import uuid4
 
+from .acp_client import ACPSession, ACPResult
+from .acp_registry import get_agent
+
 
 @dataclass
 class SubagentRun:
@@ -24,6 +27,10 @@ class SubagentRun:
     mode: str = "run"
     timeout_seconds: int = 0
     completed: bool = False
+    last_activity: Optional[datetime] = None
+    harness: str = "koi"         # "koi" (native) or "acp"
+    agent_name: str = ""         # e.g. "claude-code", "codex"
+    acp_session: Optional[Any] = None  # ACPSession instance for harness="acp"
     result: Optional[dict] = None
     exit_code: Optional[int] = None
     stdout: str = ""
@@ -139,13 +146,266 @@ class SubagentManager:
             "note": "Sub-agent started. Result will be announced when done.",
         }
 
+    async def spawn_acp_session(
+        self,
+        agent_name: str,
+        label: str,
+        cwd: Optional[str] = None,
+        auto_approve: bool = True,
+        idle_timeout: int = 1800,
+    ) -> dict:
+        """Spawn an ACP agent as a persistent session."""
+        # Depth guard
+        if self._depth >= self.max_depth:
+            return {"status": "error", "error": f"Max spawn depth reached ({self.max_depth})."}
+
+        active_count = sum(1 for r in self.active_runs.values() if not r.completed)
+        if active_count >= self.max_children:
+            return {"status": "error", "error": f"Max children reached ({self.max_children})"}
+
+        # Label uniqueness
+        for r in self.active_runs.values():
+            if not r.completed and r.label == label and r.mode == "session":
+                return {"status": "error", "error": f"Session with label '{label}' already exists"}
+
+        agent = get_agent(agent_name)
+        if not agent:
+            return {"status": "error", "error": f"Unknown agent: {agent_name}"}
+        if not agent.is_available():
+            return {"status": "error", "error": f"Agent '{agent_name}' is not installed (binary '{agent.check_binary}' not found)"}
+
+        run_id = str(uuid4())[:8]
+
+        try:
+            acp_sess = ACPSession(
+                command=agent.command,
+                cwd=cwd or os.getcwd(),
+                auto_approve=auto_approve,
+            )
+            session_id = await acp_sess.start()
+        except Exception as e:
+            return {"status": "error", "error": f"Failed to start ACP agent '{agent_name}': {e}"}
+
+        run = SubagentRun(
+            id=run_id,
+            task=f"[acp-session:{agent_name}:{label}]",
+            label=label,
+            process=acp_sess._process,
+            result_file=Path(cwd or os.getcwd()) / ".koi" / "subagent-runs" / f"{run_id}.json",
+            started_at=datetime.now(),
+            mode="session",
+            timeout_seconds=0,
+            last_activity=datetime.now(),
+            harness="acp",
+            agent_name=agent_name,
+            acp_session=acp_sess,
+        )
+        self.active_runs[run_id] = run
+
+        asyncio.create_task(self._idle_watcher(run, idle_timeout))
+
+        return {
+            "status": "accepted",
+            "run_id": run_id,
+            "label": label,
+            "agent": agent_name,
+            "acp_session_id": session_id,
+            "note": f"ACP session '{label}' started with {agent.display_name}. Use send_to_subagent to communicate.",
+        }
+
+    async def send_acp(self, target: str, message: str, timeout: float = 300.0) -> dict:
+        """Send message to an ACP session."""
+        run = self._find_session(target)
+        if not run:
+            return {"error": f"No active session found for '{target}'"}
+        if run.completed:
+            return {"error": f"Session '{target}' has ended"}
+        if run.harness != "acp" or not run.acp_session:
+            return {"error": f"'{target}' is not an ACP session"}
+
+        run.last_activity = datetime.now()
+
+        try:
+            result = await run.acp_session.send(message, timeout=timeout)
+        except Exception as e:
+            run.completed = True
+            run.error = str(e)
+            return {"error": f"ACP send failed: {e}"}
+
+        run.last_activity = datetime.now()
+        return {
+            "type": "response",
+            "content": result.content,
+            "stop_reason": result.stop_reason,
+            "tool_calls": result.tool_calls,
+            "thoughts": result.thoughts,
+            "usage": result.usage,
+        }
+
+    async def spawn_session(
+        self,
+        label: str,
+        model: Optional[str] = None,
+        thinking: Optional[str] = None,
+        cwd: Optional[str] = None,
+        idle_timeout: int = 1800,
+    ) -> dict:
+        """Spawn a persistent subagent session.
+
+        The session stays alive and accepts follow-up messages via send().
+        Communication is JSON-over-stdin/stdout (pipe mode).
+        """
+        # Depth guard
+        if self._depth >= self.max_depth:
+            return {"status": "error", "error": f"Max spawn depth reached ({self.max_depth})."}
+
+        # Children guard
+        active_count = sum(1 for r in self.active_runs.values() if not r.completed)
+        if active_count >= self.max_children:
+            return {"status": "error", "error": f"Max children reached ({self.max_children})"}
+
+        # Label uniqueness
+        for r in self.active_runs.values():
+            if not r.completed and r.label == label and r.mode == "session":
+                return {"status": "error", "error": f"Session with label '{label}' already exists"}
+
+        run_id = str(uuid4())[:8]
+        result_file = Path(cwd or os.getcwd()) / ".koi" / "subagent-runs" / f"{run_id}.json"
+        result_file.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd: List[str] = [sys.executable, "-m", "koi", "run", "--pipe"]
+        if model:
+            cmd.extend(["--model", model])
+        if thinking:
+            cmd.extend(["--thinking", thinking])
+
+        env = {**os.environ, "KOI_SPAWN_DEPTH": str(self._depth + 1)}
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            cwd=cwd or os.getcwd(),
+            env=env,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        run = SubagentRun(
+            id=run_id,
+            task=f"[session:{label}]",
+            label=label,
+            process=process,
+            result_file=result_file,
+            started_at=datetime.now(),
+            mode="session",
+            timeout_seconds=0,
+            last_activity=datetime.now(),
+        )
+        self.active_runs[run_id] = run
+
+        # Start idle timeout watcher
+        asyncio.create_task(self._idle_watcher(run, idle_timeout))
+
+        return {
+            "status": "accepted",
+            "run_id": run_id,
+            "label": label,
+            "note": f"Persistent session '{label}' started. Use send_to_subagent to communicate.",
+        }
+
+    async def send(self, target: str, message: str, timeout: float = 120.0) -> dict:
+        """Send a message to a persistent subagent and wait for the response."""
+        run = self._find_session(target)
+        if not run:
+            return {"error": f"No active session found for '{target}'"}
+        if run.completed:
+            return {"error": f"Session '{target}' has ended"}
+        if run.mode != "session":
+            return {"error": f"'{target}' is a one-shot run, not a persistent session"}
+
+        # Dispatch to ACP if applicable
+        if run.harness == "acp":
+            return await self.send_acp(target, message, timeout=timeout)
+
+        run.last_activity = datetime.now()
+
+        # Write JSON message to stdin
+        msg_json = json.dumps({"type": "message", "content": message}) + "\n"
+        try:
+            run.process.stdin.write(msg_json.encode("utf-8"))
+            await run.process.stdin.drain()
+        except (BrokenPipeError, ConnectionResetError):
+            run.completed = True
+            run.error = "Process stdin closed"
+            return {"error": "Session process has died"}
+
+        # Read JSON response from stdout
+        try:
+            resp_line = await asyncio.wait_for(
+                run.process.stdout.readline(), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            return {"error": f"Timed out waiting for response after {timeout}s"}
+
+        if not resp_line:
+            run.completed = True
+            run.error = "Process stdout closed"
+            return {"error": "Session process has ended"}
+
+        try:
+            resp = json.loads(resp_line.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError:
+            return {"error": f"Invalid JSON from session: {resp_line[:200]}"}
+
+        run.last_activity = datetime.now()
+        return resp
+
+    def _find_session(self, target: str) -> Optional["SubagentRun"]:
+        """Find an active session by label or run_id."""
+        # Try exact ID match first
+        if target in self.active_runs:
+            return self.active_runs[target]
+        # Then search by label
+        for r in self.active_runs.values():
+            if r.label == target and not r.completed and r.mode == "session":
+                return r
+        return None
+
+    async def _idle_watcher(self, run: SubagentRun, idle_timeout: int):
+        """Kill session if idle for longer than idle_timeout seconds."""
+        while not run.completed:
+            await asyncio.sleep(60)
+            if run.completed:
+                break
+            if run.last_activity and (datetime.now() - run.last_activity).total_seconds() > idle_timeout:
+                try:
+                    # Send shutdown message before killing
+                    shutdown = json.dumps({"type": "shutdown"}) + "\n"
+                    run.process.stdin.write(shutdown.encode("utf-8"))
+                    await run.process.stdin.drain()
+                    # Give it a moment to clean up
+                    await asyncio.sleep(2)
+                except Exception:
+                    pass
+                try:
+                    run.process.kill()
+                except ProcessLookupError:
+                    pass
+                run.completed = True
+                run.error = f"Idle timeout ({idle_timeout}s)"
+                if self._on_complete:
+                    await self._on_complete(run)
+                break
+
     def list_runs(self) -> list:
         """Return a summary of all tracked sub-agent runs."""
-        return [
-            {
+        runs = []
+        for r in self.active_runs.values():
+            info = {
                 "id": r.id,
                 "task": r.task[:100],
                 "label": r.label,
+                "mode": r.mode,
                 "status": "completed" if r.completed else "running",
                 "started": r.started_at.isoformat(),
                 "result_summary": (
@@ -154,8 +414,11 @@ class SubagentManager:
                     else None
                 ),
             }
-            for r in self.active_runs.values()
-        ]
+            if r.mode == "session" and r.last_activity and not r.completed:
+                idle_secs = int((datetime.now() - r.last_activity).total_seconds())
+                info["idle_seconds"] = idle_secs
+            runs.append(info)
+        return runs
 
     async def kill(self, run_id: str) -> dict:
         """Kill a running sub-agent by ID."""
@@ -163,10 +426,13 @@ class SubagentManager:
         if not run:
             return {"error": f"No run with id {run_id}"}
         if not run.completed:
-            try:
-                run.process.kill()
-            except ProcessLookupError:
-                pass
+            if run.harness == "acp" and run.acp_session:
+                await run.acp_session.kill()
+            else:
+                try:
+                    run.process.kill()
+                except ProcessLookupError:
+                    pass
             run.completed = True
             run.error = "Killed by parent"
         return {"status": "killed", "id": run_id}

@@ -96,3 +96,90 @@ def test_parse_skill_file():
         result = sm._parse_skill_file(skill_file)
         assert result["name"] == "Demo Skill"
         assert result["description"] == "This does demo things."
+
+
+def test_parse_skill_no_heading():
+    """Skill without heading uses directory name."""
+    with TemporaryDirectory() as td:
+        skill_dir = Path(td) / "my-tool"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("Just a description, no heading.")
+
+        sm = SkillsManager([td])
+        skills = sm.list_skills()
+        assert len(skills) == 1
+        assert skills[0]["name"] == "my-tool"
+        assert skills[0]["description"]  # fallback description
+
+
+def test_parse_skill_long_description_truncated():
+    """Long descriptions are truncated to 200 chars."""
+    with TemporaryDirectory() as td:
+        skill_dir = Path(td) / "verbose"
+        skill_dir.mkdir()
+        long_desc = "A" * 300
+        (skill_dir / "SKILL.md").write_text(f"# Verbose\n{long_desc}")
+
+        sm = SkillsManager([td])
+        skills = sm.list_skills()
+        assert len(skills[0]["description"]) <= 203  # 200 + "..."
+
+
+def test_list_skills_skips_unparseable():
+    """Unparseable SKILL.md files are skipped."""
+    with TemporaryDirectory() as td:
+        skill_dir = Path(td) / "bad"
+        skill_dir.mkdir()
+        # Create a SKILL.md that's actually a directory (will fail to open)
+        bad_path = skill_dir / "SKILL.md"
+        bad_path.mkdir()
+
+        sm = SkillsManager([td])
+        skills = sm.list_skills()
+        assert len(skills) == 0
+
+
+def test_read_skill_case_insensitive():
+    """Skill lookup is case-insensitive."""
+    with TemporaryDirectory() as td:
+        skill_dir = Path(td) / "MySkill"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# My Cool Skill\nDoes stuff.")
+
+        sm = SkillsManager([td])
+        content = sm.read_skill("my cool skill")
+        assert "My Cool Skill" in content
+
+
+def test_multiple_skills_paths():
+    """Skills discovered from multiple paths."""
+    with TemporaryDirectory() as td:
+        dir_a = Path(td) / "a"
+        dir_b = Path(td) / "b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        sa = dir_a / "skill-a"
+        sb = dir_b / "skill-b"
+        sa.mkdir()
+        sb.mkdir()
+        (sa / "SKILL.md").write_text("# Skill A\nFirst.")
+        (sb / "SKILL.md").write_text("# Skill B\nSecond.")
+
+        sm = SkillsManager([str(dir_a), str(dir_b)])
+        skills = sm.list_skills()
+        names = {s["name"] for s in skills}
+        assert names == {"Skill A", "Skill B"}
+
+
+def test_parse_skill_no_description():
+    """Skill with heading but no description text."""
+    with TemporaryDirectory() as td:
+        skill_dir = Path(td) / "empty-desc"
+        skill_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("# Empty\n## Section\nContent here.")
+
+        sm = SkillsManager([td])
+        skills = sm.list_skills()
+        assert len(skills) == 1
+        # Should have fallback description
+        assert skills[0]["description"]
