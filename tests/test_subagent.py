@@ -216,6 +216,7 @@ async def test_kill_terminates_process():
     mgr = SubagentManager(config)
 
     mock_proc = MagicMock()
+    mock_proc.returncode = None
     mock_proc.kill = MagicMock()
 
     from datetime import datetime
@@ -900,6 +901,7 @@ class TestSendToSubagent:
 
         # Create a fake session run
         mock_proc = AsyncMock()
+        mock_proc.returncode = None
         mock_proc.stdin = MagicMock()
         mock_proc.stdin.write = MagicMock()
         mock_proc.stdin.drain = AsyncMock()
@@ -1093,3 +1095,205 @@ from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from koi.subagent import SubagentManager, SubagentRun
+
+
+# ── Lifecycle fixes tests ──
+
+
+class TestKillRun:
+    async def test_kill_run_marks_completed(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.kill = MagicMock()
+
+        run = SubagentRun(
+            id="abc",
+            task="test",
+            label="test",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="run",
+        )
+        mgr.active_runs["abc"] = run
+
+        await mgr._kill_run(run, "test reason")
+        assert run.completed is True
+        assert run.error == "test reason"
+        mock_proc.kill.assert_called_once()
+
+    async def test_kill_run_acp_closes_gracefully(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        mock_acp = AsyncMock()
+        mock_proc = MagicMock()
+        mock_proc.returncode = 0  # already exited after close
+
+        run = SubagentRun(
+            id="abc",
+            task="[acp]",
+            label="acp-test",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            harness="acp",
+            acp_session=mock_acp,
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        await mgr._kill_run(run, "cleanup")
+        mock_acp.close.assert_called_once()
+        assert run.completed is True
+
+    async def test_kill_run_pipe_sends_shutdown(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = None
+        mock_proc.stdin = MagicMock()
+        mock_proc.stdin.write = MagicMock()
+        mock_proc.stdin.drain = AsyncMock()
+        mock_proc.wait = AsyncMock(side_effect=asyncio.TimeoutError)
+        mock_proc.kill = MagicMock()
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:test]",
+            label="test",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        await mgr._kill_run(run, "idle")
+        mock_proc.stdin.write.assert_called_once()  # shutdown message
+        mock_proc.kill.assert_called_once()  # force kill after timeout
+
+    async def test_kill_already_completed_noop(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        run = SubagentRun(
+            id="abc",
+            task="done",
+            label="done",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="run",
+            completed=True,
+        )
+        mgr.active_runs["abc"] = run
+
+        await mgr._kill_run(run, "should not change")
+        assert run.error is None  # unchanged
+
+
+class TestKillAll:
+    async def test_kills_all_active(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        for i in range(3):
+            mock_proc = MagicMock()
+            mock_proc.returncode = None
+            mock_proc.kill = MagicMock()
+            run = SubagentRun(
+                id=f"r{i}",
+                task=f"task{i}",
+                label=f"label{i}",
+                process=mock_proc,
+                result_file=Path(f"/tmp/fake{i}.json"),
+                started_at=datetime.now(),
+                mode="run",
+            )
+            mgr.active_runs[f"r{i}"] = run
+
+        # Complete one
+        mgr.active_runs["r0"].completed = True
+
+        result = await mgr.kill_all()
+        assert result["count"] == 2
+        assert "r1" in result["ids"]
+        assert "r2" in result["ids"]
+
+
+class TestProcessHealthCheck:
+    async def test_send_detects_dead_process(self):
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        mock_proc = MagicMock()
+        mock_proc.returncode = 1  # already dead
+
+        run = SubagentRun(
+            id="abc",
+            task="[session:dead]",
+            label="dead",
+            process=mock_proc,
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="session",
+            last_activity=datetime.now(),
+        )
+        mgr.active_runs["abc"] = run
+
+        result = await mgr.send("abc", "hello")
+        assert "error" in result
+        assert "exit code 1" in result["error"]
+        assert run.completed is True
+
+
+class TestCleanupCompleted:
+    def test_removes_old_completed(self):
+        from datetime import timedelta
+        config = MagicMock()
+        mgr = SubagentManager(config)
+
+        old_run = SubagentRun(
+            id="old",
+            task="old task",
+            label="old",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now() - timedelta(hours=2),
+            mode="run",
+            completed=True,
+        )
+        new_run = SubagentRun(
+            id="new",
+            task="new task",
+            label="new",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now(),
+            mode="run",
+            completed=True,
+        )
+        active_run = SubagentRun(
+            id="active",
+            task="active task",
+            label="active",
+            process=MagicMock(),
+            result_file=Path("/tmp/fake.json"),
+            started_at=datetime.now() - timedelta(hours=2),
+            mode="run",
+            completed=False,
+        )
+
+        mgr.active_runs = {"old": old_run, "new": new_run, "active": active_run}
+        removed = mgr.cleanup_completed(max_age_seconds=3600)
+        assert removed == 1
+        assert "old" not in mgr.active_runs
+        assert "new" in mgr.active_runs  # too recent
+        assert "active" in mgr.active_runs  # not completed

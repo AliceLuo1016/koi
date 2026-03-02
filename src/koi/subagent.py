@@ -227,9 +227,11 @@ class SubagentManager:
 
         try:
             result = await run.acp_session.send(message, timeout=timeout)
+            if result.stop_reason == "timeout":
+                await self._kill_run(run, f"ACP prompt timed out after {timeout}s")
+                return {"error": f"ACP prompt timed out after {timeout}s. Session killed."}
         except Exception as e:
-            run.completed = True
-            run.error = str(e)
+            await self._kill_run(run, str(e))
             return {"error": f"ACP send failed: {e}"}
 
         run.last_activity = datetime.now()
@@ -323,6 +325,13 @@ class SubagentManager:
         if run.mode != "session":
             return {"error": f"'{target}' is a one-shot run, not a persistent session"}
 
+        # Health check: detect already-dead processes
+        if not run.completed and run.process and run.process.returncode is not None:
+            run.completed = True
+            run.exit_code = run.process.returncode
+            run.error = f"Process exited with code {run.process.returncode}"
+            return {"error": f"Session process has died (exit code {run.process.returncode})"}
+
         # Dispatch to ACP if applicable
         if run.harness == "acp":
             return await self.send_acp(target, message, timeout=timeout)
@@ -345,7 +354,9 @@ class SubagentManager:
                 run.process.stdout.readline(), timeout=timeout
             )
         except asyncio.TimeoutError:
-            return {"error": f"Timed out waiting for response after {timeout}s"}
+            # Timeout = kill to prevent zombie processes and stale responses
+            await self._kill_run(run, f"Timed out after {timeout}s")
+            return {"error": f"Timed out waiting for response after {timeout}s. Session killed."}
 
         if not resp_line:
             run.completed = True
@@ -378,23 +389,7 @@ class SubagentManager:
             if run.completed:
                 break
             if run.last_activity and (datetime.now() - run.last_activity).total_seconds() > idle_timeout:
-                try:
-                    # Send shutdown message before killing
-                    shutdown = json.dumps({"type": "shutdown"}) + "\n"
-                    run.process.stdin.write(shutdown.encode("utf-8"))
-                    await run.process.stdin.drain()
-                    # Give it a moment to clean up
-                    await asyncio.sleep(2)
-                except Exception:
-                    pass
-                try:
-                    run.process.kill()
-                except ProcessLookupError:
-                    pass
-                run.completed = True
-                run.error = f"Idle timeout ({idle_timeout}s)"
-                if self._on_complete:
-                    await self._on_complete(run)
+                await self._kill_run(run, f"Idle timeout ({idle_timeout}s)")
                 break
 
     def list_runs(self) -> list:
@@ -420,22 +415,75 @@ class SubagentManager:
             runs.append(info)
         return runs
 
-    async def kill(self, run_id: str) -> dict:
-        """Kill a running sub-agent by ID."""
+    async def kill(self, run_id: str, cascade: bool = True) -> dict:
+        """Kill a running sub-agent by ID. Cascade kills children if any."""
         run = self.active_runs.get(run_id)
         if not run:
             return {"error": f"No run with id {run_id}"}
         if not run.completed:
-            if run.harness == "acp" and run.acp_session:
-                await run.acp_session.kill()
-            else:
-                try:
-                    run.process.kill()
-                except ProcessLookupError:
-                    pass
-            run.completed = True
-            run.error = "Killed by parent"
+            await self._kill_run(run, "Killed by parent")
         return {"status": "killed", "id": run_id}
+
+    async def kill_all(self) -> dict:
+        """Kill all active sub-agents. Used for cascade stop."""
+        killed = []
+        for run_id, run in list(self.active_runs.items()):
+            if not run.completed:
+                await self._kill_run(run, "Killed by parent (kill_all)")
+                killed.append(run_id)
+        return {"status": "killed", "count": len(killed), "ids": killed}
+
+    async def _kill_run(self, run: SubagentRun, reason: str):
+        """Internal: kill a run and clean up resources."""
+        if run.completed:
+            return
+
+        if run.harness == "acp" and run.acp_session:
+            try:
+                await run.acp_session.close()
+            except Exception:
+                try:
+                    await run.acp_session.kill()
+                except Exception:
+                    pass
+        elif run.mode == "session" and run.process and run.process.stdin:
+            # Try graceful shutdown for pipe mode
+            try:
+                shutdown = json.dumps({"type": "shutdown"}) + "\n"
+                run.process.stdin.write(shutdown.encode("utf-8"))
+                await run.process.stdin.drain()
+                # Brief wait for clean exit
+                try:
+                    await asyncio.wait_for(run.process.wait(), timeout=2)
+                except asyncio.TimeoutError:
+                    pass
+            except Exception:
+                pass
+
+        # Force kill if still alive
+        if run.process and run.process.returncode is None:
+            try:
+                run.process.kill()
+            except ProcessLookupError:
+                pass
+
+        run.completed = True
+        run.error = reason
+        if self._on_complete:
+            await self._on_complete(run)
+
+    def cleanup_completed(self, max_age_seconds: int = 3600) -> int:
+        """Remove completed runs older than max_age_seconds. Returns count removed."""
+        to_remove = []
+        now = datetime.now()
+        for run_id, run in self.active_runs.items():
+            if run.completed:
+                age = (now - run.started_at).total_seconds()
+                if age > max_age_seconds:
+                    to_remove.append(run_id)
+        for run_id in to_remove:
+            del self.active_runs[run_id]
+        return len(to_remove)
 
     def get_result(self, run_id: str) -> Optional[dict]:
         """Return the result dict for a completed run (or None)."""
