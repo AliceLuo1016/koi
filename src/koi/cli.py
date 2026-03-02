@@ -847,6 +847,76 @@ def config():
 
 
 @main.command()
+@click.option("--host", default=None, help="Server host (default: from config or 0.0.0.0)")
+@click.option("--port", default=None, type=int, help="Server port (default: from config or 8080)")
+@click.option("--channel", default=None, help="Start only this channel (e.g. 'slack')")
+def serve(host, port, channel):
+    """Start the Koi server with webhook/channel integrations."""
+    try:
+        from .server import KoiServer
+    except ImportError:
+        console.print(
+            "❌ Server mode requires extra dependencies.\n"
+            "Install with: pip install 'koi[server]'",
+            style="red",
+        )
+        return
+
+    try:
+        config = Config.load()
+    except FileNotFoundError:
+        console.print("❌ No .koi/config.json found. Run 'koi init' first.", style="red")
+        return
+
+    _host = host or config.server_host
+    _port = port or config.server_port
+
+    # Build channel list
+    channels = []
+    slack_cfg = config.channels.get("slack", {})
+    want_slack = channel is None or channel == "slack"
+
+    if want_slack and slack_cfg.get("enabled"):
+        bot_token = slack_cfg.get("bot_token", "")
+        app_token = slack_cfg.get("app_token", "")
+        if not bot_token or not app_token:
+            console.print(
+                "❌ Slack is enabled but bot_token or app_token is missing in config.",
+                style="red",
+            )
+            return
+
+        # Lazy-import to avoid ImportError when slack-sdk isn't installed
+        from .channels.slack import SlackChannel
+        from .sessions import SessionManager
+
+        session_manager = SessionManager(config)
+        slack_channel = SlackChannel(
+            bot_token=bot_token,
+            app_token=app_token,
+            session_manager=session_manager,
+            mention_only_in_channels=slack_cfg.get("mention_only_in_channels", True),
+            ack_reaction=slack_cfg.get("ack_reaction", "eyes"),
+        )
+        channels.append(slack_channel)
+
+    if channel and not channels:
+        console.print(f"❌ Channel '{channel}' is not enabled or not configured.", style="red")
+        return
+
+    server = KoiServer(config, channels=channels)
+
+    console.print(f"🐠 Starting Koi server on {_host}:{_port}", style="bold cyan")
+    if channels:
+        for ch in channels:
+            console.print(f"  ✅ Channel: {type(ch).__name__}", style="green")
+    else:
+        console.print("  ⚠️  No channels enabled (health check only)", style="yellow")
+
+    server.run(host=_host, port=_port)
+
+
+@main.command()
 def memory():
     """Show current memory."""
     try:

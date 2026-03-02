@@ -54,7 +54,7 @@ def load_claude_code_api_key() -> Optional[str]:
 
 class Config:
     """Configuration for the koi agent."""
-    
+
     def __init__(
         self,
         api_base: str = "",
@@ -67,6 +67,8 @@ class Config:
         api_format: str = None,
         thinking_level: str = "low",
         prompt_caching: bool = True,
+        server: Dict[str, Any] = None,
+        channels: Dict[str, Any] = None,
     ):
         self.api_base = api_base
         self.model = model
@@ -83,6 +85,16 @@ class Config:
             self.api_format = "anthropic"
         else:
             self.api_format = "responses"
+
+        # Server config (for `koi serve`)
+        _server = server or {}
+        self.server_enabled: bool = _server.get("enabled", False)
+        self.server_host: str = _server.get("host", "0.0.0.0")
+        self.server_port: int = _server.get("port", 8080)
+
+        # Channel configs
+        _channels = channels or {}
+        self.channels: Dict[str, Any] = _channels
 
         # Resolve API key: explicit > env var > Claude Code config (for anthropic)
         if api_key:
@@ -117,6 +129,8 @@ class Config:
             api_format=data.get("api_format"),
             thinking_level=data.get("thinking_level", "low"),
             prompt_caching=data.get("prompt_caching", True),
+            server=data.get("server"),
+            channels=data.get("channels"),
         )
     
     def save(self, config_path: Path = None):
@@ -139,6 +153,14 @@ class Config:
         }
         if self.temperature is not None:
             data["temperature"] = self.temperature
+        if self.server_enabled or self.server_host != "0.0.0.0" or self.server_port != 8080:
+            data["server"] = {
+                "enabled": self.server_enabled,
+                "host": self.server_host,
+                "port": self.server_port,
+            }
+        if self.channels:
+            data["channels"] = self.channels
 
         with open(config_path, "w") as f:
             json.dump(data, f, indent=2)
@@ -173,6 +195,14 @@ class Config:
         }
         if self.temperature is not None:
             d["temperature"] = self.temperature
+        if self.server_enabled or self.server_host != "0.0.0.0" or self.server_port != 8080:
+            d["server"] = {
+                "enabled": self.server_enabled,
+                "host": self.server_host,
+                "port": self.server_port,
+            }
+        if self.channels:
+            d["channels"] = self.channels
         return d
 
 
