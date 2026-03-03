@@ -1,9 +1,13 @@
 """Main agent implementation with conversation loop."""
 
 import asyncio
+import atexit
 import json
+import os
 import re
 import signal
+import sys
+import time
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
 from rich.console import Console
@@ -118,6 +122,7 @@ class Agent:
 
         self._pending_subagent_results: List[Dict[str, Any]] = []
         self._interrupted = False  # Flag-based interrupt (no raise from signal handler)
+        self._last_interrupt_time: Optional[float] = None
 
         # System prompt stored separately — never in the messages array.
         # Injected into the API payload at call time by LLMClient.
@@ -147,6 +152,14 @@ class Agent:
         # 1. raise KeyboardInterrupt properly interrupts prompt_toolkit
         # 2. task.cancel() fires immediately from the main thread
         prev_handler = signal.signal(signal.SIGINT, self._handle_sigint)
+
+        # Register atexit handler for cleanup on force exit paths
+        def _atexit_cleanup():
+            self.subagent_manager.force_kill_all_sync()
+            if self.llm_client.usage.total_requests > 0:
+                log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
+
+        atexit.register(_atexit_cleanup)
 
         self._print_session_header()
         console.print("  Type [dim]/help[/dim] for commands, [dim]/exit[/dim] to quit, [dim]Alt+Enter[/dim] for newline")
@@ -358,8 +371,12 @@ class Agent:
             if self.compactor.needs_compaction(self.messages):
                 if not non_interactive:
                     console.print("🔄 Compacting conversation history...", style="yellow")
-                
-                self.messages = await self.compactor.compact_messages(self.messages)
+
+                try:
+                    self.messages = await self.compactor.compact_messages(self.messages)
+                except asyncio.CancelledError:
+                    # Compaction cancelled — keep original messages, re-raise
+                    raise
 
             # Final context window guard before LLM call
             self.messages = enforce_context_budget(
@@ -604,8 +621,6 @@ class Agent:
     
     def _print_session_header(self):
         """Print a bordered session header card."""
-        import os
-
         model = self.config.model
         cwd = os.getcwd()
         home = os.path.expanduser("~")
@@ -732,10 +747,25 @@ Just type your requests normally and I'll help you with tasks using available to
         KeyboardInterrupt and CancelledError that caused flaky behavior
         (interrupt landing inside httpx cleanup, Rich spinner, etc.).
 
+        Double Ctrl+C within 1.5 seconds triggers immediate force exit via
+        os._exit() for cases where graceful cancellation is stuck.
+
         When no agent task is running (i.e. we're at the prompt), we raise
         KeyboardInterrupt so prompt_toolkit can handle it normally.
         """
+        now = time.time()
+
         if self._current_task and not self._current_task.done():
+            # Double Ctrl+C: force exit if second interrupt within 1.5s
+            if (
+                self._last_interrupt_time is not None
+                and now - self._last_interrupt_time < 1.5
+            ):
+                self._last_interrupt_time = now
+                self._force_exit()
+                return
+
+            self._last_interrupt_time = now
             self._interrupted = True
             self._current_task.cancel()
             # Also close any active LLM stream to unblock httpx immediately
@@ -743,6 +773,16 @@ Just type your requests normally and I'll help you with tasks using available to
         else:
             # At the prompt — let prompt_toolkit handle it
             raise KeyboardInterrupt
+
+    def _force_exit(self):
+        """Immediate termination for double Ctrl+C.
+
+        Uses sys.stderr.write (signal-handler safe) and os._exit
+        (bypasses Python cleanup) for reliable shutdown.
+        """
+        sys.stderr.write("\n⚡ Force exit.\n")
+        sys.stderr.flush()
+        os._exit(1)
 
     async def _on_subagent_complete(self, run) -> None:
         """Callback invoked when a sub-agent finishes."""

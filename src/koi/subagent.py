@@ -433,6 +433,15 @@ class SubagentManager:
                 killed.append(run_id)
         return {"status": "killed", "count": len(killed), "ids": killed}
 
+    def force_kill_all_sync(self):
+        """Synchronous force-kill for atexit handler."""
+        for run in self.active_runs.values():
+            if not run.completed and run.process and run.process.returncode is None:
+                try:
+                    run.process.kill()
+                except ProcessLookupError:
+                    pass
+
     async def _kill_run(self, run: SubagentRun, reason: str):
         """Internal: kill a run and clean up resources."""
         if run.completed:

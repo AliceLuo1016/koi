@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+import signal
+import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 import yaml
@@ -316,3 +318,159 @@ async def test_message_rollback_preserves_completed_iterations():
     )
 
     await agent.llm_client.close()
+
+
+# ── Double Ctrl+C / force exit ──
+
+def _make_agent():
+    """Helper to create a non-interactive Agent with mocked config."""
+    from koi.agent import Agent
+
+    config = Mock()
+    config.api_key = "test"
+    config.api_base = "http://localhost:1234"
+    config.model = "test"
+    config.max_tokens = 100
+    config.temperature = None
+    config.context_window = 128000
+    config.skills_paths = []
+    config.api_format = "responses"
+
+    return Agent(config, non_interactive=True)
+
+
+async def test_double_ctrl_c_force_exit():
+    """Two rapid SIGINT calls (within 1.5s) should trigger _force_exit."""
+    agent = _make_agent()
+
+    # Set up a hanging task so _current_task is active
+    hang_event = asyncio.Event()
+
+    async def _hang_chat(*args, **kwargs):
+        await hang_event.wait()
+
+    agent.llm_client.chat = _hang_chat
+    agent.messages.append({"role": "user", "content": "test"})
+    agent._current_task = asyncio.create_task(
+        agent._agent_loop(non_interactive=True)
+    )
+    await asyncio.sleep(0.05)
+
+    with patch.object(agent, "_force_exit") as mock_force_exit:
+        # First Ctrl+C — graceful cancel
+        agent._handle_sigint(signal.SIGINT, None)
+        assert agent._interrupted is True
+        assert agent._last_interrupt_time is not None
+        mock_force_exit.assert_not_called()
+
+        # Second Ctrl+C within 1.5s — force exit
+        # The task may already be done from the cancel, so re-create it
+        # to simulate a stuck task
+        agent._current_task = asyncio.create_task(hang_event.wait())
+        agent._handle_sigint(signal.SIGINT, None)
+        mock_force_exit.assert_called_once()
+
+    # Cleanup
+    agent._current_task.cancel()
+    try:
+        await agent._current_task
+    except asyncio.CancelledError:
+        pass
+    await agent.llm_client.close()
+
+
+async def test_single_ctrl_c_then_delayed_second():
+    """Two SIGINT calls >2s apart should both do graceful cancel, not force exit."""
+    agent = _make_agent()
+
+    with patch.object(agent, "_force_exit") as mock_force_exit:
+        # Simulate a running task
+        hang_event = asyncio.Event()
+        agent._current_task = asyncio.create_task(hang_event.wait())
+        await asyncio.sleep(0.01)
+
+        # First Ctrl+C
+        agent._handle_sigint(signal.SIGINT, None)
+        first_time = agent._last_interrupt_time
+
+        # Cancel and recreate task to simulate next operation
+        try:
+            await agent._current_task
+        except asyncio.CancelledError:
+            pass
+
+        # Wait >1.5s (simulate with time manipulation)
+        agent._last_interrupt_time = first_time - 2.0  # pretend it was 2s ago
+
+        # Second Ctrl+C — should be graceful (not force exit)
+        agent._current_task = asyncio.create_task(hang_event.wait())
+        agent._interrupted = False
+        agent._handle_sigint(signal.SIGINT, None)
+
+        mock_force_exit.assert_not_called()
+        assert agent._interrupted is True
+
+    # Cleanup
+    agent._current_task.cancel()
+    try:
+        await agent._current_task
+    except asyncio.CancelledError:
+        pass
+    await agent.llm_client.close()
+
+
+async def test_atexit_kills_subprocesses():
+    """force_kill_all_sync should kill active subprocess runs."""
+    from koi.subagent import SubagentManager, SubagentRun
+    from datetime import datetime
+
+    config = Mock()
+    mgr = SubagentManager(config)
+
+    # Create mock processes
+    alive_proc = Mock()
+    alive_proc.returncode = None  # still running
+    alive_proc.kill = Mock()
+
+    dead_proc = Mock()
+    dead_proc.returncode = 0  # already exited
+    dead_proc.kill = Mock()
+
+    # Active run with alive process
+    run1 = SubagentRun(
+        id="r1",
+        task="task1",
+        label="alive",
+        process=alive_proc,
+        result_file=Path("/tmp/r1.json"),
+        started_at=datetime.now(),
+        completed=False,
+    )
+    # Completed run
+    run2 = SubagentRun(
+        id="r2",
+        task="task2",
+        label="done",
+        process=dead_proc,
+        result_file=Path("/tmp/r2.json"),
+        started_at=datetime.now(),
+        completed=True,
+    )
+    # Active run but process already exited
+    run3 = SubagentRun(
+        id="r3",
+        task="task3",
+        label="exited",
+        process=dead_proc,
+        result_file=Path("/tmp/r3.json"),
+        started_at=datetime.now(),
+        completed=False,
+    )
+
+    mgr.active_runs = {"r1": run1, "r2": run2, "r3": run3}
+
+    mgr.force_kill_all_sync()
+
+    # Only the alive, non-completed process should be killed
+    alive_proc.kill.assert_called_once()
+    dead_proc.kill.assert_not_called()

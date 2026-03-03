@@ -90,12 +90,15 @@ The Agent supports 3 execution modes:
 
 Koi uses flag-based cancellation (not `raise KeyboardInterrupt`):
 
-1. `SIGINT` sets `_interrupted = True` and calls `task.cancel()`
-2. `LLMClient.abort_stream()` closes the active httpx stream immediately
-3. The agent loop catches `CancelledError` and rolls back partial messages
-4. Only messages from the interrupted iteration are rolled back; completed iterations are preserved
+1. **Single Ctrl+C** — sets `_interrupted = True`, calls `task.cancel()`, and `LLMClient.abort_stream()` closes the active httpx stream immediately
+2. The agent loop catches `CancelledError` and rolls back partial messages
+3. Only messages from the interrupted iteration are rolled back; completed iterations are preserved
+4. **Double Ctrl+C** (within 1.5s) — calls `os._exit(1)` for immediate force exit, bypassing async cleanup
+5. An `atexit` handler ensures subagent processes are killed and usage is logged even on abrupt exit
 
 When no agent task is running (at the prompt), `KeyboardInterrupt` is raised normally for prompt_toolkit to handle.
+
+Compaction is also cancellation-safe: if interrupted mid-compaction, the original (pre-compaction) messages are preserved.
 
 ## Related Pages
 
