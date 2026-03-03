@@ -381,8 +381,10 @@ class TestThinkingFallback:
                 "400", request=MagicMock(), response=mock_resp
             )
 
+        from koi.errors import KoiAPIError
+
         client.client.post = fake_post
-        with pytest.raises(RuntimeError, match="HTTP 400"):
+        with pytest.raises(KoiAPIError):
             await client.chat([{"role": "user", "content": "test"}])
         assert client._thinking_disabled_fallback is False
 

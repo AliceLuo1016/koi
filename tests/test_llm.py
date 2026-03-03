@@ -609,7 +609,9 @@ async def test_temperature_included_in_cc_payload(cc_client):
 
 
 async def test_retry_non_retryable_status_raises_immediately(client):
-    """Non-retryable HTTP status (e.g. 404) raises RuntimeError without retrying."""
+    """Non-retryable HTTP status (e.g. 404) raises KoiAPIError without retrying."""
+    from koi.errors import KoiAPIError
+
     call_count = 0
 
     async def always_404(url, headers=None, json=None):
@@ -618,18 +620,21 @@ async def test_retry_non_retryable_status_raises_immediately(client):
         mock_resp = MagicMock()
         mock_resp.status_code = 404
         mock_resp.text = "Not found"
+        mock_resp.headers = {}
         raise httpx.HTTPStatusError("404", request=MagicMock(), response=mock_resp)
 
     client.client.post = always_404
 
-    with pytest.raises(RuntimeError, match="HTTP 404"):
+    with pytest.raises(KoiAPIError):
         await client.chat([{"role": "user", "content": "hi"}])
 
     assert call_count == 1  # No retries
 
 
 async def test_retry_all_exhausted_raises(client):
-    """After MAX_RETRIES retries of a 429, RuntimeError is raised."""
+    """After MAX_RETRIES retries of a 429, KoiRateLimitError is raised."""
+    from koi.errors import KoiRateLimitError
+
     with patch("asyncio.sleep", new_callable=AsyncMock):
         async def always_429(url, headers=None, json=None):
             mock_resp = MagicMock()
@@ -639,7 +644,7 @@ async def test_retry_all_exhausted_raises(client):
             raise httpx.HTTPStatusError("429", request=MagicMock(), response=mock_resp)
 
         client.client.post = always_429
-        with pytest.raises(RuntimeError, match="retries"):
+        with pytest.raises(KoiRateLimitError):
             await client.chat([{"role": "user", "content": "hi"}])
 
 
@@ -1143,7 +1148,9 @@ async def test_retry_invalid_retry_after_falls_back_to_backoff(client):
 
 
 async def test_retry_non_http_exception_raises_immediately(client):
-    """Unexpected non-HTTP exceptions raise RuntimeError without retrying."""
+    """Unexpected non-HTTP exceptions raise KoiAPIError without retrying."""
+    from koi.errors import KoiAPIError
+
     call_count = 0
 
     async def bad_post(url, headers=None, json=None):
@@ -1152,7 +1159,7 @@ async def test_retry_non_http_exception_raises_immediately(client):
         raise ValueError("unexpected internal error")
 
     client.client.post = bad_post
-    with pytest.raises(RuntimeError, match="Request failed"):
+    with pytest.raises(KoiAPIError, match="Request failed"):
         await client.chat([{"role": "user", "content": "hi"}])
 
     assert call_count == 1  # No retries
@@ -1251,7 +1258,9 @@ async def test_anthropic_payload_includes_temperature():
 
 
 async def test_stream_chat_http_error_raises_runtime_error(client):
-    """stream_chat (Responses format) raises RuntimeError on HTTP error."""
+    """stream_chat (Responses format) raises KoiServerError on HTTP 500."""
+    from koi.errors import KoiServerError
+
     mock_req = MagicMock()
     mock_resp = MagicMock()
     mock_resp.status_code = 500
@@ -1265,14 +1274,16 @@ async def test_stream_chat_http_error_raises_runtime_error(client):
             pass
 
     client.client.stream = lambda *a, **kw: _ErrorCtx()
-    with pytest.raises(RuntimeError, match="HTTP 500"):
+    with pytest.raises(KoiServerError):
         async for _ in client.stream_chat([{"role": "user", "content": "hi"}]):
             pass
     await client.close()
 
 
 async def test_stream_cc_tokens_http_error_raises_runtime_error(cc_client):
-    """_stream_chat_completions_tokens raises RuntimeError on HTTP error."""
+    """_stream_chat_completions_tokens raises KoiServerError on HTTP 503."""
+    from koi.errors import KoiServerError
+
     mock_req = MagicMock()
     mock_resp = MagicMock()
     mock_resp.status_code = 503
@@ -1286,14 +1297,16 @@ async def test_stream_cc_tokens_http_error_raises_runtime_error(cc_client):
             pass
 
     cc_client.client.stream = lambda *a, **kw: _ErrorCtx()
-    with pytest.raises(RuntimeError, match="HTTP 503"):
+    with pytest.raises(KoiServerError):
         async for _ in cc_client.stream_chat([{"role": "user", "content": "hi"}]):
             pass
     await cc_client.close()
 
 
 async def test_stream_anthropic_tokens_http_error_raises_runtime_error():
-    """_stream_anthropic_tokens raises RuntimeError on HTTP error."""
+    """_stream_anthropic_tokens raises KoiAuthError on HTTP 401."""
+    from koi.errors import KoiAuthError
+
     config = Config(
         api_base="https://api.anthropic.com/v1/messages",
         api_key="test-key",
@@ -1315,14 +1328,16 @@ async def test_stream_anthropic_tokens_http_error_raises_runtime_error():
             pass
 
     anthro_client.client.stream = lambda *a, **kw: _ErrorCtx()
-    with pytest.raises(RuntimeError, match="HTTP 401"):
+    with pytest.raises(KoiAuthError):
         async for _ in anthro_client.stream_chat([{"role": "user", "content": "hi"}]):
             pass
     await anthro_client.close()
 
 
 async def test_stream_chat_general_exception_raises_runtime_error(client):
-    """stream_chat (Responses format) wraps unexpected exceptions in RuntimeError."""
+    """stream_chat (Responses format) wraps unexpected exceptions in KoiAPIError."""
+    from koi.errors import KoiAPIError
+
     class _ErrorCtx:
         async def __aenter__(self):
             raise ConnectionError("network down")
@@ -1330,7 +1345,7 @@ async def test_stream_chat_general_exception_raises_runtime_error(client):
             pass
 
     client.client.stream = lambda *a, **kw: _ErrorCtx()
-    with pytest.raises(RuntimeError, match="Stream request failed"):
+    with pytest.raises(KoiAPIError, match="Stream request failed"):
         async for _ in client.stream_chat([{"role": "user", "content": "hi"}]):
             pass
     await client.close()

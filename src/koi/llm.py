@@ -7,6 +7,11 @@ from typing import List, Dict, Any, Optional, AsyncGenerator
 import httpx
 
 from .config import Config
+from .errors import (
+    KoiAPIError, KoiRateLimitError, KoiAuthError, KoiBillingError,
+    KoiOverloadedError, KoiServerError, KoiContextOverflowError,
+    KoiConnectionError, classify_http_error, extract_retry_delay,
+)
 from .usage import TokenUsage
 
 # Sentinel yielded by stream_chat when a tool-call block begins.
@@ -141,6 +146,7 @@ class LLMClient:
     RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
     MAX_RETRIES = 6
     MAX_BACKOFF = 60
+    MAX_RETRY_DELAY = 60  # seconds — fail fast if server wants longer
 
     def __init__(self, config: Config):
         self.config = config
@@ -665,7 +671,6 @@ class LLMClient:
                 return convert_fn(response.json())
 
             except httpx.HTTPStatusError as e:
-                last_error = e
                 error_text = getattr(e.response, "text", "")
 
                 # Detect thinking-related API errors and retry without thinking
@@ -680,36 +685,49 @@ class LLMClient:
                     self.headers.pop("anthropic-beta", None)
                     continue  # retry immediately with cleaned payload
 
-                if e.response.status_code not in self.RETRYABLE_STATUS_CODES:
-                    raise RuntimeError(
-                        f"HTTP {e.response.status_code}: {e.response.text}"
+                # Extract retry delay from headers + body
+                headers_dict = dict(e.response.headers)
+                retry_delay = extract_retry_delay(error_text, headers_dict)
+
+                # Classify the error
+                classified = classify_http_error(
+                    e.response.status_code, error_text, retry_after=retry_delay
+                )
+                last_error = classified
+
+                if not classified.retryable:
+                    raise classified
+
+                # Check max retry delay cap
+                if retry_delay and retry_delay > self.MAX_RETRY_DELAY:
+                    raise KoiRateLimitError(
+                        f"Rate limited — server wants {retry_delay:.0f}s wait (max: {self.MAX_RETRY_DELAY}s)",
+                        status_code=e.response.status_code,
+                        error_text=error_text,
+                        retry_after=retry_delay,
                     )
-                retry_after = e.response.headers.get("retry-after")
-                if retry_after:
-                    try:
-                        delay = min(float(retry_after), self.MAX_BACKOFF)
-                    except ValueError:
-                        delay = min(2 ** (attempt + 1), self.MAX_BACKOFF)
-                else:
-                    delay = min(2 ** (attempt + 1), self.MAX_BACKOFF)
+
+                delay = retry_delay if retry_delay else min(2 ** (attempt + 1), self.MAX_BACKOFF)
                 await asyncio.sleep(delay)
 
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
-                last_error = e
+                last_error = KoiConnectionError(f"Connection error: {e}")
                 delay = min(2 ** (attempt + 1), self.MAX_BACKOFF)
                 await asyncio.sleep(delay)
 
             except asyncio.CancelledError:
                 raise
 
-            except Exception as e:
-                raise RuntimeError(f"Request failed: {e}")
+            except KoiAPIError:
+                raise  # Already classified, don't wrap
 
-        if isinstance(last_error, httpx.HTTPStatusError):
-            raise RuntimeError(
-                f"HTTP {last_error.response.status_code} after {self.MAX_RETRIES} retries: {last_error.response.text}"
-            )
-        raise RuntimeError(f"Request failed after {self.MAX_RETRIES} retries: {last_error}")
+            except Exception as e:
+                raise KoiAPIError(f"Request failed: {e}", retryable=False)
+
+        # Exhausted retries
+        if last_error:
+            raise last_error
+        raise KoiAPIError("Request failed after retries", retryable=False)
 
     async def _stream_chat(
         self, url: str, payload: Dict[str, Any]
@@ -1117,11 +1135,12 @@ class LLMClient:
         except asyncio.CancelledError:
             raise
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            )
+            error_text = getattr(e.response, "text", "")
+            raise classify_http_error(e.response.status_code, error_text)
+        except KoiAPIError:
+            raise
         except Exception as e:
-            raise RuntimeError(f"Stream request failed: {e}")
+            raise KoiAPIError(f"Stream request failed: {e}", retryable=False)
 
         # Assemble response from accumulated deltas
         message: Dict[str, Any] = {"role": "assistant"}
@@ -1211,11 +1230,12 @@ class LLMClient:
         except asyncio.CancelledError:
             raise
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            )
+            error_text = getattr(e.response, "text", "")
+            raise classify_http_error(e.response.status_code, error_text)
+        except KoiAPIError:
+            raise
         except Exception as e:
-            raise RuntimeError(f"Stream request failed: {e}")
+            raise KoiAPIError(f"Stream request failed: {e}", retryable=False)
 
         message: Dict[str, Any] = {"role": "assistant"}
         if full_content:
@@ -1348,11 +1368,12 @@ class LLMClient:
         except asyncio.CancelledError:
             raise
         except httpx.HTTPStatusError as e:
-            raise RuntimeError(
-                f"HTTP {e.response.status_code}: {e.response.text}"
-            )
+            error_text = getattr(e.response, "text", "")
+            raise classify_http_error(e.response.status_code, error_text)
+        except KoiAPIError:
+            raise
         except Exception as e:
-            raise RuntimeError(f"Stream request failed: {e}")
+            raise KoiAPIError(f"Stream request failed: {e}", retryable=False)
 
         message: Dict[str, Any] = {"role": "assistant"}
         if full_content:

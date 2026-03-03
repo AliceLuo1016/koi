@@ -203,10 +203,28 @@ MAX_BACKOFF = 60
 
 Retry behavior:
 - **Exponential backoff**: `min(2^(attempt+1), 60)` seconds
-- **Retry-After header**: Respected if present
+- **Retry delay extraction**: Checks `retry-after` header, `x-ratelimit-reset-after` header, and body patterns ("reset after Xs", "retry in Xs", `"retryDelay": "Xs"`)
+- **Max retry delay cap**: If server requests >60s wait, fails immediately instead of hanging
 - **Thinking errors**: Auto-retry without thinking params (no backoff)
 - **Connection errors / timeouts**: Retried with backoff
-- **Non-retryable HTTP errors**: Raised immediately
+- **Non-retryable HTTP errors**: Raised immediately as typed errors
+
+### Error Classification (`errors.py`)
+
+All API errors are classified into typed exceptions:
+
+| Error | Status Codes | Retryable | User Message |
+|-------|-------------|-----------|-------------|
+| `KoiAuthError` | 401, 403 | No | "Check your API key" |
+| `KoiBillingError` | 402 + billing keywords | No | "Check your account" |
+| `KoiContextOverflowError` | 400 + overflow patterns | No | "Try /compact or /new" |
+| `KoiRateLimitError` | 429 + rate limit body patterns | Yes | "Wait and try again" |
+| `KoiOverloadedError` | 529, "overloaded" in body | Yes | "Provider having issues" |
+| `KoiServerError` | 500, 502, 503, 504 | Yes | "Provider having issues" |
+| `KoiConnectionError` | Network/timeout | Yes | "Check your network" |
+
+Body-text patterns (from pi-ai): `resource_exhausted`, `rate_limit`, `overloaded`, `service_unavailable`, `other_side_closed`.
+Context overflow patterns cover 15+ providers (Anthropic, OpenAI, Google, xAI, Groq, OpenRouter, etc.).
 
 ## Abort / Cancellation
 

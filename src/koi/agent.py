@@ -19,6 +19,10 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style as PtStyle
 
 from .config import Config
+from .errors import (
+    KoiAPIError, KoiRateLimitError, KoiAuthError, KoiBillingError,
+    KoiServerError, KoiOverloadedError, KoiContextOverflowError, KoiConnectionError,
+)
 from .llm import LLMClient, TOOL_CALL_START
 from .memory import Memory
 from .skills import SkillsManager
@@ -481,8 +485,45 @@ class Agent:
             except asyncio.CancelledError:
                 raise
 
+            except KoiAuthError as e:
+                console.print(f"🔑 Authentication failed. Check your API key.", style="red")
+                if not non_interactive:
+                    console.print(f"   {e}", style="dim red")
+                break
+
+            except KoiBillingError as e:
+                console.print(f"💳 Billing issue. Check your account.", style="red")
+                if not non_interactive:
+                    console.print(f"   {e}", style="dim red")
+                break
+
+            except KoiContextOverflowError as e:
+                console.print(f"📏 Context too long. Try /compact or start a /new session.", style="yellow")
+                if not non_interactive:
+                    console.print(f"   {e}", style="dim yellow")
+                break
+
+            except KoiRateLimitError as e:
+                if e.retry_after:
+                    console.print(f"⏳ Rate limited. Server wants {e.retry_after:.0f}s wait. Try again later.", style="yellow")
+                else:
+                    console.print(f"⏳ Rate limited after retries. Wait a moment and try again.", style="yellow")
+                break
+
+            except (KoiServerError, KoiOverloadedError) as e:
+                console.print(f"🔥 Provider is having issues ({e}). Try again later.", style="yellow")
+                break
+
+            except KoiConnectionError as e:
+                console.print(f"🌐 Connection failed after retries. Check your network.", style="red")
+                break
+
+            except KoiAPIError as e:
+                console.print(f"❌ API error: {e}", style="red")
+                break
+
             except Exception as e:
-                error_msg = f"❌ Error: {e}"
+                error_msg = f"❌ Unexpected error: {e}"
                 console.print(error_msg, style="red")
                 if non_interactive:
                     print(error_msg)
@@ -552,10 +593,15 @@ class Agent:
                 spinner.stop()
             raise
 
+        except KoiAPIError:
+            if spinner:
+                spinner.stop()
+            raise  # Already classified
+
         except Exception as e:
             if spinner:
                 spinner.stop()
-            raise RuntimeError(f"LLM request failed: {e}")
+            raise KoiAPIError(f"LLM request failed: {e}", retryable=False)
     
     async def _handle_command(self, command: str):
         """Handle special commands."""
