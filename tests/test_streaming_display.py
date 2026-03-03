@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from koi.config import Config
-from koi.llm import LLMClient
+from koi.llm import LLMClient, TOOL_CALL_START
 
 
 # ── Streaming helpers ──
@@ -129,8 +129,8 @@ async def test_responses_stream_chat_sets_last_response_tool_calls(responses_cli
     ):
         tokens.append(token)
 
-    # No text tokens for tool calls
-    assert tokens == []
+    # Only sentinel token for tool calls, no text
+    assert tokens == [TOOL_CALL_START]
     resp = responses_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]
@@ -223,7 +223,7 @@ async def test_cc_stream_chat_sets_last_response_tool_calls(cc_client):
     ):
         tokens.append(token)
 
-    assert tokens == []
+    assert tokens == [TOOL_CALL_START]
     resp = cc_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]
@@ -282,7 +282,7 @@ async def test_anthropic_stream_chat_sets_last_response_tool_calls(anthropic_cli
     ):
         tokens.append(token)
 
-    assert tokens == []
+    assert tokens == [TOOL_CALL_START]
     resp = anthropic_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]

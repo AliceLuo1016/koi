@@ -649,6 +649,11 @@ def switch():
     is_flag=True,
     help="Run in pipe mode for persistent subagent sessions (JSON on stdin/stdout)"
 )
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable debug transcript logging to .koi/transcript.jsonl"
+)
 def run(
     task: Optional[str],
     non_interactive: bool,
@@ -656,6 +661,7 @@ def run(
     result_file: Optional[str],
     model_override: Optional[str],
     pipe: bool,
+    debug: bool,
 ):
     """Start an interactive agent session or run a specific task."""
     try:
@@ -664,6 +670,8 @@ def run(
             config.thinking_level = normalize_think_level(thinking) or thinking
         if model_override is not None:
             config.model = model_override
+        if debug:
+            config.debug = True
 
         agent = Agent(config, non_interactive=non_interactive or bool(task) or pipe)
 

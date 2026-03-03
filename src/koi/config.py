@@ -69,6 +69,7 @@ class Config:
         prompt_caching: bool = True,
         server: Dict[str, Any] = None,
         channels: Dict[str, Any] = None,
+        debug: bool = False,
     ):
         self.api_base = api_base
         self.model = model
@@ -91,6 +92,9 @@ class Config:
         self.server_enabled: bool = _server.get("enabled", False)
         self.server_host: str = _server.get("host", "0.0.0.0")
         self.server_port: int = _server.get("port", 8080)
+
+        # Debug transcript logging
+        self.debug = debug
 
         # Channel configs
         _channels = channels or {}
@@ -131,6 +135,7 @@ class Config:
             prompt_caching=data.get("prompt_caching", True),
             server=data.get("server"),
             channels=data.get("channels"),
+            debug=data.get("debug", False),
         )
     
     def save(self, config_path: Path = None):

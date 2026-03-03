@@ -15,7 +15,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style as PtStyle
 
 from .config import Config
-from .llm import LLMClient
+from .llm import LLMClient, TOOL_CALL_START
 from .memory import Memory
 from .skills import SkillsManager
 from .sandbox import Sandbox
@@ -25,6 +25,7 @@ from .prompts import build_system_prompt, build_tool_result_message
 from .compaction import ContextCompactor
 from .context_pruning import prune_context
 from .context_guard import enforce_context_budget
+from .transcript import TranscriptLogger
 from .usage import log_usage, estimate_cost
 
 console = Console()
@@ -125,6 +126,18 @@ class Agent:
             non_interactive=non_interactive,
             use_reasoning_tags=self.llm_client.use_reasoning_tags,
         )
+
+        # Debug transcript logger
+        import hashlib
+        koi_dir = Path.cwd() / ".koi"
+        self.transcript = TranscriptLogger(koi_dir, enabled=config.debug)
+        self.transcript.log_session_start({
+            "model": config.model,
+            "api_format": config.api_format,
+            "system_prompt_hash": hashlib.sha256(
+                self.system_prompt.encode()
+            ).hexdigest()[:16],
+        })
     
     async def run_interactive(self):
         """Run interactive agent session."""
@@ -163,10 +176,9 @@ class Agent:
                         continue
 
                 # Add user message
-                self.messages.append({
-                    "role": "user",
-                    "content": user_input
-                })
+                user_msg = {"role": "user", "content": user_input}
+                self.messages.append(user_msg)
+                self.transcript.log_message("user_message", user_msg)
 
                 # Run agent loop as a cancellable task
                 self._interrupted = False
@@ -473,6 +485,16 @@ class Agent:
             async for token in self.llm_client.stream_chat(
                 messages, tools=tools, system_prompt=self.system_prompt
             ):
+                if token == TOOL_CALL_START:
+                    if spinner is None:
+                        # Spinner was stopped after text — restart for tool call
+                        spinner = console.status("  [dim]Preparing tool call...[/dim]", spinner="dots")
+                        spinner.start()
+                    else:
+                        # Spinner still active (no text yet) — update message
+                        spinner.update("  [dim]Preparing tool call...[/dim]")
+                    continue
+
                 collected_text += token
                 if not self.llm_client.use_reasoning_tags:
                     if first_token:

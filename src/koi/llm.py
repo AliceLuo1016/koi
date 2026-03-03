@@ -9,6 +9,10 @@ import httpx
 from .config import Config
 from .usage import TokenUsage
 
+# Sentinel yielded by stream_chat when a tool-call block begins.
+# Allows the UI layer to show a spinner during tool-call argument generation.
+TOOL_CALL_START = '\x00__TOOL_CALL__\x00'
+
 # Anthropic thinking budget tokens by level
 _ANTHROPIC_THINKING_BUDGETS = {
     "minimal": 1024,
@@ -1071,7 +1075,8 @@ class LLMClient:
 
                         elif event_type == "response.function_call_arguments.delta":
                             cid = data.get("call_id", data.get("item_id", ""))
-                            if cid not in tool_calls:
+                            is_new = cid not in tool_calls
+                            if is_new:
                                 tool_calls[cid] = {
                                     "id": cid,
                                     "type": "function",
@@ -1080,6 +1085,8 @@ class LLMClient:
                             tool_calls[cid]["function"]["arguments"] += data.get(
                                 "delta", ""
                             )
+                            if is_new:
+                                yield TOOL_CALL_START
 
                         elif event_type in (
                             "response.function_call.name",
@@ -1094,6 +1101,7 @@ class LLMClient:
                                         "type": "function",
                                         "function": {"name": "", "arguments": ""},
                                     }
+                                    yield TOOL_CALL_START
                                 tool_calls[cid]["function"]["name"] = item.get(
                                     "name", ""
                                 )
@@ -1179,7 +1187,8 @@ class LLMClient:
 
                         for tc_delta in delta.get("tool_calls", []):
                             idx = tc_delta.get("index", 0)
-                            if idx not in tool_calls:
+                            is_new = idx not in tool_calls
+                            if is_new:
                                 tool_calls[idx] = {
                                     "id": tc_delta.get("id", ""),
                                     "type": "function",
@@ -1194,6 +1203,8 @@ class LLMClient:
                                 tool_calls[idx]["function"]["arguments"] += func[
                                     "arguments"
                                 ]
+                            if is_new:
+                                yield TOOL_CALL_START
                 finally:
                     self._active_stream_response = None
 
@@ -1311,6 +1322,7 @@ class LLMClient:
                                         "arguments": "",
                                     },
                                 }
+                                yield TOOL_CALL_START
 
                         elif event_type == "content_block_delta":
                             delta = data.get("delta", {})
