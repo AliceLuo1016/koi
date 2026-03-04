@@ -197,7 +197,7 @@ class Agent:
                     continue
 
                 # Handle special commands (but not file paths like /home/...)
-                _COMMANDS = {'exit', 'quit', 'help', 'memory', 'remember', 'compact', 'skills', 'status', 'stats', 'usage', 'new'}
+                _COMMANDS = {'exit', 'quit', 'help', 'memory', 'remember', 'compact', 'skills', 'status', 'stats', 'usage', 'new', 'fork'}
                 if user_input.startswith('/'):
                     cmd_word = user_input.split()[0][1:].lower()  # e.g. '/exit' -> 'exit'
                     if cmd_word in _COMMANDS:
@@ -729,6 +729,17 @@ class Agent:
                 )
             console.print("🆕 New session started. Context cleared.", style="green")
 
+        elif cmd == '/fork':
+            if self._ephemeral:
+                console.print("Cannot fork in ephemeral mode.", style="yellow")
+            else:
+                new_id = self.session_manager.fork_session(
+                    messages=self.messages,
+                    model=self.config.model,
+                    cwd=str(Path.cwd()),
+                )
+                console.print(f"🔀 Forked session → {new_id}. Continuing in new branch.", style="green")
+
         else:
             console.print(f"Unknown command: {command}", style="red")
     
@@ -783,6 +794,7 @@ class Agent:
 - /stats          - Alias for /status
 - /usage          - Show detailed token usage and estimated cost
 - /new             - Start a new session (clear context)
+- /fork            - Fork into a new session (keeps current messages)
 
 [cyan]Usage:[/cyan]
 Just type your requests normally and I'll help you with tasks using available tools.

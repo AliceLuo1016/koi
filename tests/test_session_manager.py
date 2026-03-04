@@ -197,3 +197,47 @@ class TestResumeSession:
         sm = SessionManager(koi_dir, session_path=koi_dir / "sessions" / "nonexistent.jsonl")
         with pytest.raises(FileNotFoundError):
             sm.resume_session()
+
+
+class TestForkSession:
+    def test_fork_creates_new_session_with_messages(self, koi_dir):
+        sm = SessionManager(koi_dir)
+        sm.start_session(model="test-model")
+        sm.save_message({"role": "user", "content": "Hello"})
+        sm.save_message({"role": "assistant", "content": "Hi"})
+        original_path = sm.session_path
+        original_id = sm.session_id
+
+        msgs = [
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi"},
+        ]
+        new_id = sm.fork_session(messages=msgs, model="test-model")
+
+        assert new_id != original_id
+        assert sm.session_path != original_path
+        assert sm.session_path.exists()
+        assert original_path.exists()
+
+        data = sm.load_session()
+        assert len(data["messages"]) == 2
+        assert data["messages"][0]["content"] == "Hello"
+        sm.close()
+
+    def test_fork_new_messages_go_to_fork(self, koi_dir):
+        sm = SessionManager(koi_dir)
+        sm.start_session(model="test")
+        sm.save_message({"role": "user", "content": "original"})
+        original_path = sm.session_path
+
+        sm.fork_session(messages=[{"role": "user", "content": "original"}], model="test")
+        sm.save_message({"role": "user", "content": "new in fork"})
+        sm.close()
+
+        data = sm.load_session()
+        assert len(data["messages"]) == 2
+        assert data["messages"][1]["content"] == "new in fork"
+
+        sm2 = SessionManager(koi_dir, session_path=original_path)
+        data_orig = sm2.load_session()
+        assert len(data_orig["messages"]) == 1

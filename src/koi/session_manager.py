@@ -218,6 +218,17 @@ class SessionManager:
 
         return files[0] if files else None
 
+    def fork_session(self, messages: List[Dict[str, Any]], model: str, cwd: Optional[str] = None) -> str:
+        """Fork: close current session, create a new one with copied messages.
+
+        Returns the new session ID.
+        """
+        self.close()
+        new_id = self.start_session(model=model, cwd=cwd)
+        for msg in messages:
+            self.save_message(msg)
+        return new_id
+
     def close(self) -> None:
         """Flush and close the session file."""
         if self._file:
