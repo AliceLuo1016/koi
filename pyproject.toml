@@ -23,7 +23,7 @@ koi = "koi.__main__:main"
 
 [project.optional-dependencies]
 acp = [
-    "acp-sdk>=0.1.0",
+    "agent-client-protocol>=0.8.0",
 ]
 server = [
     "starlette>=0.30.0",
