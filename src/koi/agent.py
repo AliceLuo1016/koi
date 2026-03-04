@@ -354,7 +354,9 @@ class Agent:
             # Hide cron tools in non-interactive mode to prevent recursive scheduling
             cron_tool_names = {"add_cron_job", "list_cron_jobs", "remove_cron_job"}
             tools = [t for t in tools if t["function"]["name"] not in cron_tool_names]
-        
+
+        _overflow_retried = False
+
         while True:
             # Snapshot for fine-grained rollback on cancellation:
             # if cancelled mid-iteration, only the current iteration's
@@ -498,10 +500,16 @@ class Agent:
                 break
 
             except KoiContextOverflowError as e:
-                console.print(f"📏 Context too long. Try /compact or start a /new session.", style="yellow")
-                if not non_interactive:
-                    console.print(f"   {e}", style="dim yellow")
-                break
+                if not _overflow_retried:
+                    console.print("📏 Context too long, auto-compacting...", style="yellow")
+                    self.messages = await self.compactor.compact_messages(self.messages)
+                    _overflow_retried = True
+                    continue
+                else:
+                    console.print(f"📏 Context too long. Try /compact or start a /new session.", style="yellow")
+                    if not non_interactive:
+                        console.print(f"   {e}", style="dim yellow")
+                    break
 
             except KoiRateLimitError as e:
                 if e.retry_after:

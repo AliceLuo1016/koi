@@ -6,6 +6,7 @@ from pathlib import Path
 
 from koi.agent import Agent, _fmt_num, strip_thinking_tags
 from koi.config import Config
+from koi.errors import KoiContextOverflowError
 
 
 def test_fmt_num():
@@ -192,4 +193,94 @@ async def test_on_subagent_complete():
         
         # Should add result to pending messages
         assert len(agent._pending_subagent_results) == 1
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_auto_compact_retry():
+    """Test that context overflow triggers auto-compaction and retries once."""
+    config = Config({"model": "test", "api_key": "test"})
+
+    with patch('koi.agent.LLMClient') as mock_llm_cls, \
+         patch('koi.agent.Memory'), \
+         patch('koi.agent.SkillsManager'), \
+         patch('koi.agent.Sandbox'), \
+         patch('koi.agent.SubagentManager'), \
+         patch('koi.agent.ToolExecutor'), \
+         patch('koi.agent.ContextCompactor') as mock_compactor_cls, \
+         patch('koi.agent.console') as mock_console:
+
+        agent = Agent(config, non_interactive=True)
+        agent.system_prompt = "test"
+
+        # First call raises overflow, second call returns a normal response
+        normal_response = {
+            "choices": [{
+                "message": {"role": "assistant", "content": "Hello!"},
+                "finish_reason": "stop",
+            }]
+        }
+        agent.llm_client.chat = AsyncMock(
+            side_effect=[KoiContextOverflowError("too many tokens"), normal_response]
+        )
+
+        # Compactor returns a shorter message list
+        compacted = [{"role": "user", "content": "compacted"}]
+        agent.compactor.compact_messages = AsyncMock(return_value=compacted)
+        agent.compactor.needs_compaction.return_value = False
+
+        # Add a user message
+        agent.messages = [{"role": "user", "content": "Hello"}]
+
+        await agent._agent_loop(non_interactive=True)
+
+        # Compaction should have been called once
+        agent.compactor.compact_messages.assert_called_once()
+
+        # Agent should have gotten a response (assistant message appended)
+        assistant_msgs = [m for m in agent.messages if m.get("role") == "assistant"]
+        assert len(assistant_msgs) == 1
+        assert assistant_msgs[0]["content"] == "Hello!"
+
+
+@pytest.mark.asyncio
+async def test_context_overflow_double_overflow_breaks():
+    """Test that a second context overflow after retry breaks the loop."""
+    config = Config({"model": "test", "api_key": "test"})
+
+    with patch('koi.agent.LLMClient') as mock_llm_cls, \
+         patch('koi.agent.Memory'), \
+         patch('koi.agent.SkillsManager'), \
+         patch('koi.agent.Sandbox'), \
+         patch('koi.agent.SubagentManager'), \
+         patch('koi.agent.ToolExecutor'), \
+         patch('koi.agent.ContextCompactor') as mock_compactor_cls, \
+         patch('koi.agent.console') as mock_console:
+
+        agent = Agent(config, non_interactive=True)
+        agent.system_prompt = "test"
+
+        # Both calls raise overflow
+        agent.llm_client.chat = AsyncMock(
+            side_effect=[
+                KoiContextOverflowError("too many tokens"),
+                KoiContextOverflowError("still too many tokens"),
+            ]
+        )
+
+        # Compactor returns a shorter message list
+        compacted = [{"role": "user", "content": "compacted"}]
+        agent.compactor.compact_messages = AsyncMock(return_value=compacted)
+        agent.compactor.needs_compaction.return_value = False
+
+        # Add a user message
+        agent.messages = [{"role": "user", "content": "Hello"}]
+
+        await agent._agent_loop(non_interactive=True)
+
+        # Compaction should have been called exactly once (only retries once)
+        agent.compactor.compact_messages.assert_called_once()
+
+        # No assistant message should have been added (loop broke)
+        assistant_msgs = [m for m in agent.messages if m.get("role") == "assistant"]
+        assert len(assistant_msgs) == 0
 
