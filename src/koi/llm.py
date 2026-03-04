@@ -149,7 +149,6 @@ class LLMClient:
         self.config = config
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
         self._thinking_disabled_fallback = False
-        self._last_stream_response: Optional[Dict[str, Any]] = None
         self._active_stream_response: Optional[httpx.Response] = None  # for abort on Ctrl+C
         self.usage = TokenUsage()
         self._stream_include_usage = True  # try stream_options.include_usage; disable on error
@@ -508,6 +507,33 @@ class LLMClient:
         system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Send a request to the Responses API."""
+        if stream:
+            full_content = ""
+            tool_calls: Dict[str, Dict[str, Any]] = {}
+            async for event in self._stream_responses_events(messages, tools, system_prompt=system_prompt):
+                if event.type == "text_delta":
+                    full_content += event.delta
+                elif event.type == "toolcall_start":
+                    cid = event.tool_call_id
+                    tool_calls[cid] = {
+                        "id": cid, "type": "function",
+                        "function": {"name": event.tool_name, "arguments": ""},
+                    }
+                elif event.type == "toolcall_delta":
+                    # Find the most recent tool call to append to
+                    for tc in reversed(list(tool_calls.values())):
+                        tc["function"]["arguments"] += event.delta
+                        break
+                elif event.type == "usage":
+                    self._extract_usage_from_event(event)
+
+            message: Dict[str, Any] = {"role": "assistant"}
+            if full_content:
+                message["content"] = full_content
+            if tool_calls:
+                message["tool_calls"] = list(tool_calls.values())
+            return {"choices": [{"message": message, "finish_reason": "stop"}]}
+
         instructions, input_items = self._convert_messages_to_input(messages, system_prompt=system_prompt)
 
         payload: Dict[str, Any] = {
@@ -523,8 +549,6 @@ class LLMClient:
             payload["instructions"] = instructions
         if tools:
             payload["tools"] = self._convert_tools(tools)
-        if stream:
-            payload["stream"] = True
 
         # Add reasoning for Responses API providers (only if model supports it)
         if self._should_send_thinking():
@@ -533,10 +557,6 @@ class LLMClient:
                 payload["reasoning"] = {"effort": effort}
 
         url = self.config.api_base.rstrip("/")
-
-        if stream:
-            return await self._stream_chat(url, payload)
-
         return await self._post_with_retries(url, payload, self._convert_response)
 
     def _apply_prompt_caching(
@@ -669,12 +689,32 @@ class LLMClient:
         system_prompt: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Send a request to a Chat Completions API endpoint."""
+        if stream:
+            full_content = ""
+            tool_calls: Dict[int, Dict[str, Any]] = {}
+            async for event in self._stream_cc_events(messages, tools, system_prompt=system_prompt):
+                if event.type == "text_delta":
+                    full_content += event.delta
+                elif event.type == "toolcall_start":
+                    tool_calls[event.content_index] = {
+                        "id": event.tool_call_id, "type": "function",
+                        "function": {"name": event.tool_name, "arguments": ""},
+                    }
+                elif event.type == "toolcall_delta":
+                    if event.content_index in tool_calls:
+                        tool_calls[event.content_index]["function"]["arguments"] += event.delta
+                elif event.type == "usage":
+                    self._extract_usage_from_event(event)
+
+            message: Dict[str, Any] = {"role": "assistant"}
+            if full_content:
+                message["content"] = full_content
+            if tool_calls:
+                message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
+            return {"choices": [{"message": message, "finish_reason": "stop"}]}
+
         payload = self._build_cc_payload(messages, tools, stream, system_prompt=system_prompt)
         url = self.config.api_base.rstrip("/")
-
-        if stream:
-            return await self._stream_chat_completions(url, payload)
-
         return await self._post_with_retries(url, payload, self._convert_cc_response)
 
     def _strip_thinking_params(self, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -760,201 +800,6 @@ class LLMClient:
             raise last_error
         raise KoiAPIError("Request failed after retries", retryable=False)
 
-    async def _stream_chat(
-        self, url: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Handle streaming response and return assembled result."""
-        async with self.client.stream(
-            "POST", url, headers=self.headers, json=payload
-        ) as response:
-            self._active_stream_response = response
-            try:
-                response.raise_for_status()
-
-                full_content = ""
-                tool_calls: Dict[str, Dict[str, Any]] = {}
-
-                async for line in response.aiter_lines():
-                    if not line.strip() or not line.startswith("data: "):
-                        continue
-
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-
-                    event_type = data.get("type", "")
-
-                    # Text deltas
-                    if event_type == "response.output_text.delta":
-                        full_content += data.get("delta", "")
-
-                    # Tool-call argument deltas
-                    elif event_type == "response.function_call_arguments.delta":
-                        cid = data.get("call_id", data.get("item_id", ""))
-                        if cid not in tool_calls:
-                            tool_calls[cid] = {
-                                "id": cid,
-                                "type": "function",
-                                "function": {"name": "", "arguments": ""},
-                            }
-                        tool_calls[cid]["function"]["arguments"] += data.get(
-                            "delta", ""
-                        )
-
-                    # Tool-call name
-                    elif event_type in (
-                        "response.function_call.name",
-                        "response.output_item.added",
-                    ):
-                        item = data.get("item", data)
-                        if item.get("type") == "function_call":
-                            cid = item.get("call_id", item.get("id", ""))
-                            if cid not in tool_calls:
-                                tool_calls[cid] = {
-                                    "id": cid,
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                }
-                            tool_calls[cid]["function"]["name"] = item.get(
-                                "name", ""
-                            )
-
-                    # Final complete response — parse directly
-                    elif event_type == "response.completed":
-                        resp = data.get("response", {})
-                        if resp:
-                            return self._convert_response(resp)
-
-                # Assemble from accumulated deltas (response.completed was not received)
-                # Estimate usage since the provider didn't report it
-                if full_content or tool_calls:
-                    estimated_output = len(full_content) // 4 + sum(
-                        len(tc["function"]["arguments"]) // 4 for tc in tool_calls.values()
-                    )
-                    self.usage.add(input_t=0, output_t=max(estimated_output, 1))
-
-                message: Dict[str, Any] = {"role": "assistant"}
-                if full_content:
-                    message["content"] = full_content
-                if tool_calls:
-                    message["tool_calls"] = list(tool_calls.values())
-
-                return {
-                    "choices": [{"message": message, "finish_reason": "stop"}]
-                }
-            finally:
-                self._active_stream_response = None
-
-    async def _stream_chat_completions(
-        self, url: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Handle Chat Completions streaming and return assembled result."""
-        # Try with stream_options first; if provider rejects (400), disable and retry
-        if self._stream_include_usage and payload.get("stream_options"):
-            try:
-                async with self.client.stream(
-                    "POST", url, headers=self.headers, json=payload
-                ) as response:
-                    self._active_stream_response = response
-                    try:
-                        if response.status_code == 400:
-                            # Provider doesn't support stream_options — disable for this session
-                            self._stream_include_usage = False
-                            payload.pop("stream_options", None)
-                        else:
-                            response.raise_for_status()
-                            return await self._parse_cc_stream(response)
-                    finally:
-                        self._active_stream_response = None
-            except httpx.HTTPStatusError:
-                # Also catch 400 raised as exception
-                self._stream_include_usage = False
-                payload.pop("stream_options", None)
-
-        # Retry (or first attempt) without stream_options
-        async with self.client.stream(
-            "POST", url, headers=self.headers, json=payload
-        ) as response:
-            self._active_stream_response = response
-            try:
-                response.raise_for_status()
-                return await self._parse_cc_stream(response)
-            finally:
-                self._active_stream_response = None
-
-    async def _parse_cc_stream(self, response: httpx.Response) -> Dict[str, Any]:
-        """Parse a Chat Completions SSE stream into a response dict."""
-        full_content = ""
-        tool_calls: Dict[int, Dict[str, Any]] = {}
-        usage_found = False
-
-        async for line in response.aiter_lines():
-            if not line.strip() or not line.startswith("data: "):
-                continue
-
-            data_str = line[6:]
-            if data_str.strip() == "[DONE]":
-                break
-
-            try:
-                data = json.loads(data_str)
-            except json.JSONDecodeError:
-                continue
-
-            # Extract usage from final chunk
-            if "usage" in data:
-                self._extract_usage(data, "chat_completions")
-                usage_found = True
-
-            choices = data.get("choices", [])
-            if not choices:
-                continue
-            delta = choices[0].get("delta", {})
-
-            # Text content
-            if "content" in delta and delta["content"]:
-                full_content += delta["content"]
-
-            # Tool calls
-            for tc_delta in delta.get("tool_calls", []):
-                idx = tc_delta.get("index", 0)
-                if idx not in tool_calls:
-                    tool_calls[idx] = {
-                        "id": tc_delta.get("id", ""),
-                        "type": "function",
-                        "function": {"name": "", "arguments": ""},
-                    }
-                if tc_delta.get("id"):
-                    tool_calls[idx]["id"] = tc_delta["id"]
-                func = tc_delta.get("function", {})
-                if func.get("name"):
-                    tool_calls[idx]["function"]["name"] = func["name"]
-                if func.get("arguments"):
-                    tool_calls[idx]["function"]["arguments"] += func["arguments"]
-
-        # Fallback: estimate usage from content length if provider didn't report it
-        if not usage_found and (full_content or tool_calls):
-            estimated_output = len(full_content) // 4 + sum(
-                len(tc["function"]["arguments"]) // 4 for tc in tool_calls.values()
-            )
-            self.usage.add(input_t=0, output_t=max(estimated_output, 1))
-
-        message: Dict[str, Any] = {"role": "assistant"}
-        if full_content:
-            message["content"] = full_content
-        if tool_calls:
-            message["tool_calls"] = [
-                tool_calls[i] for i in sorted(tool_calls)
-            ]
-
-        return {
-            "choices": [{"message": message, "finish_reason": "stop"}]
-        }
 
     async def stream_chat(
         self,
@@ -967,20 +812,28 @@ class LLMClient:
         The consumer (agent.py) is responsible for accumulating text,
         tool calls, and assembling the final response dict.
         """
-        self._last_stream_response = None
-
         if self.config.api_format == "anthropic":
             async for event in self._stream_anthropic_events(messages, tools, system_prompt=system_prompt):
                 yield event
-            return
+        elif self.config.api_format == "chat_completions":
+            async for event in self._stream_cc_events(messages, tools, system_prompt=system_prompt):
+                yield event
+        else:
+            async for event in self._stream_responses_events(messages, tools, system_prompt=system_prompt):
+                yield event
 
-        if self.config.api_format == "chat_completions":
-            async for token in self._stream_chat_completions_tokens(
-                messages, tools, system_prompt=system_prompt
-            ):
-                yield token
-            return
+    async def _stream_responses_events(
+        self,
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]] = None,
+        system_prompt: Optional[str] = None,
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Yield StreamEvent objects from a Responses API streaming response.
 
+        This is the unified event adapter for the Responses API path.
+        It handles SSE parsing and yields structured events; the consumer
+        handles accumulation and response assembly.
+        """
         instructions, input_items = self._convert_messages_to_input(messages, system_prompt=system_prompt)
 
         payload: Dict[str, Any] = {
@@ -1005,8 +858,10 @@ class LLMClient:
 
         url = self.config.api_base.rstrip("/")
 
-        full_content = ""
-        tool_calls: Dict[str, Dict[str, Any]] = {}
+        content_len = 0
+        tool_args_len = 0
+        seen_call_ids: set = set()
+        completed = False
 
         try:
             async with self.client.stream(
@@ -1033,23 +888,17 @@ class LLMClient:
 
                         if event_type == "response.output_text.delta":
                             delta = data.get("delta", "")
-                            full_content += delta
+                            content_len += len(delta)
                             yield StreamEvent(type="text_delta", delta=delta)
 
                         elif event_type == "response.function_call_arguments.delta":
                             cid = data.get("call_id", data.get("item_id", ""))
-                            is_new = cid not in tool_calls
-                            if is_new:
-                                tool_calls[cid] = {
-                                    "id": cid,
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                }
+                            if cid not in seen_call_ids:
+                                seen_call_ids.add(cid)
                                 yield StreamEvent(type="toolcall_start", tool_call_id=cid)
-                            tool_calls[cid]["function"]["arguments"] += data.get(
-                                "delta", ""
-                            )
-                            yield StreamEvent(type="toolcall_delta", delta=data.get("delta", ""))
+                            arg_delta = data.get("delta", "")
+                            tool_args_len += len(arg_delta)
+                            yield StreamEvent(type="toolcall_delta", delta=arg_delta)
 
                         elif event_type in (
                             "response.function_call.name",
@@ -1059,24 +908,24 @@ class LLMClient:
                             if item.get("type") == "function_call":
                                 cid = item.get("call_id", item.get("id", ""))
                                 name = item.get("name", "")
-                                if cid not in tool_calls:
-                                    tool_calls[cid] = {
-                                        "id": cid,
-                                        "type": "function",
-                                        "function": {"name": "", "arguments": ""},
-                                    }
+                                if cid not in seen_call_ids:
+                                    seen_call_ids.add(cid)
                                     yield StreamEvent(
                                         type="toolcall_start",
                                         tool_call_id=cid,
                                         tool_name=name,
                                     )
-                                tool_calls[cid]["function"]["name"] = name
 
                         elif event_type == "response.completed":
                             resp = data.get("response", {})
                             if resp:
-                                self._last_stream_response = self._convert_response(resp)
-                                return
+                                usage = resp.get("usage", {})
+                                if usage:
+                                    yield StreamEvent(type="usage", usage={
+                                        "input_tokens": usage.get("input_tokens", 0),
+                                        "output_tokens": usage.get("output_tokens", 0),
+                                    })
+                                completed = True
                 finally:
                     self._active_stream_response = None
 
@@ -1090,18 +939,17 @@ class LLMClient:
         except Exception as e:
             raise KoiAPIError(f"Stream request failed: {e}", retryable=False)
 
-        # Assemble response from accumulated deltas
-        message: Dict[str, Any] = {"role": "assistant"}
-        if full_content:
-            message["content"] = full_content
-        if tool_calls:
-            message["tool_calls"] = list(tool_calls.values())
+        # Fallback usage estimation if no response.completed
+        if not completed and (content_len or tool_args_len):
+            estimated = content_len // 4 + tool_args_len // 4
+            yield StreamEvent(type="usage", usage={
+                "input_tokens": 0,
+                "output_tokens": max(estimated, 1),
+            })
 
-        self._last_stream_response = {
-            "choices": [{"message": message, "finish_reason": "stop"}]
-        }
+        yield StreamEvent(type="done")
 
-    async def _stream_chat_completions_tokens(
+    async def _stream_cc_events(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -1109,14 +957,40 @@ class LLMClient:
     ) -> AsyncGenerator[StreamEvent, None]:
         """Yield StreamEvent objects from a Chat Completions streaming response.
 
-        Also accumulates tool calls and stores the full assembled response
-        in ``self._last_stream_response`` after the stream ends.
+        This is the unified event adapter for the Chat Completions path.
+        It handles SSE parsing, stream_options negotiation, and yields
+        structured events; the consumer handles accumulation and response assembly.
         """
         payload = self._build_cc_payload(messages, tools, stream=True, system_prompt=system_prompt)
         url = self.config.api_base.rstrip("/")
 
-        full_content = ""
-        tool_calls: Dict[int, Dict[str, Any]] = {}
+        # stream_options negotiation: try with include_usage; if 400, disable and retry
+        if self._stream_include_usage and payload.get("stream_options"):
+            try:
+                async with self.client.stream(
+                    "POST", url, headers=self.headers, json=payload
+                ) as response:
+                    self._active_stream_response = response
+                    try:
+                        if response.status_code == 400:
+                            self._stream_include_usage = False
+                            payload.pop("stream_options", None)
+                        else:
+                            response.raise_for_status()
+                            async for event in self._parse_cc_sse(response):
+                                yield event
+                            return
+                    finally:
+                        self._active_stream_response = None
+            except httpx.HTTPStatusError:
+                self._stream_include_usage = False
+                payload.pop("stream_options", None)
+
+        # Main attempt (or retry without stream_options)
+        content_len = 0
+        tool_args_len = 0
+        usage_found = False
+        seen_indices: set = set()
 
         try:
             async with self.client.stream(
@@ -1139,9 +1013,14 @@ class LLMClient:
                         except json.JSONDecodeError:
                             continue
 
-                        # Extract usage from final chunk
+                        # Usage from final chunk
                         if "usage" in data:
-                            self._extract_usage(data, "chat_completions")
+                            usage = data["usage"]
+                            yield StreamEvent(type="usage", usage={
+                                "prompt_tokens": usage.get("prompt_tokens", 0),
+                                "completion_tokens": usage.get("completion_tokens", 0),
+                            })
+                            usage_found = True
 
                         choices = data.get("choices", [])
                         if not choices:
@@ -1149,35 +1028,23 @@ class LLMClient:
                         delta = choices[0].get("delta", {})
 
                         if "content" in delta and delta["content"]:
-                            full_content += delta["content"]
+                            content_len += len(delta["content"])
                             yield StreamEvent(type="text_delta", delta=delta["content"])
 
                         for tc_delta in delta.get("tool_calls", []):
                             idx = tc_delta.get("index", 0)
-                            is_new = idx not in tool_calls
+                            is_new = idx not in seen_indices
                             if is_new:
-                                tool_calls[idx] = {
-                                    "id": tc_delta.get("id", ""),
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                }
-                            if tc_delta.get("id"):
-                                tool_calls[idx]["id"] = tc_delta["id"]
-                            func = tc_delta.get("function", {})
-                            if func.get("name"):
-                                tool_calls[idx]["function"]["name"] = func["name"]
-                            if func.get("arguments"):
-                                tool_calls[idx]["function"]["arguments"] += func[
-                                    "arguments"
-                                ]
-                            if is_new:
+                                seen_indices.add(idx)
                                 yield StreamEvent(
                                     type="toolcall_start",
                                     content_index=idx,
                                     tool_call_id=tc_delta.get("id", ""),
-                                    tool_name=func.get("name", ""),
+                                    tool_name=tc_delta.get("function", {}).get("name", ""),
                                 )
+                            func = tc_delta.get("function", {})
                             if func.get("arguments"):
+                                tool_args_len += len(func["arguments"])
                                 yield StreamEvent(
                                     type="toolcall_delta",
                                     content_index=idx,
@@ -1196,15 +1063,83 @@ class LLMClient:
         except Exception as e:
             raise KoiAPIError(f"Stream request failed: {e}", retryable=False)
 
-        message: Dict[str, Any] = {"role": "assistant"}
-        if full_content:
-            message["content"] = full_content
-        if tool_calls:
-            message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
+        # Fallback usage estimation
+        if not usage_found and (content_len or tool_args_len):
+            estimated = content_len // 4 + tool_args_len // 4
+            yield StreamEvent(type="usage", usage={
+                "prompt_tokens": 0,
+                "completion_tokens": max(estimated, 1),
+            })
 
-        self._last_stream_response = {
-            "choices": [{"message": message, "finish_reason": "stop"}]
-        }
+        yield StreamEvent(type="done")
+
+    async def _parse_cc_sse(
+        self, response: httpx.Response
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Parse CC SSE lines from an already-opened response into StreamEvent objects."""
+        content_len = 0
+        tool_args_len = 0
+        usage_found = False
+        seen_indices: set = set()
+
+        async for line in response.aiter_lines():
+            if not line.strip() or not line.startswith("data: "):
+                continue
+
+            data_str = line[6:]
+            if data_str.strip() == "[DONE]":
+                break
+
+            try:
+                data = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
+
+            if "usage" in data:
+                usage = data["usage"]
+                yield StreamEvent(type="usage", usage={
+                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                    "completion_tokens": usage.get("completion_tokens", 0),
+                })
+                usage_found = True
+
+            choices = data.get("choices", [])
+            if not choices:
+                continue
+            delta = choices[0].get("delta", {})
+
+            if "content" in delta and delta["content"]:
+                content_len += len(delta["content"])
+                yield StreamEvent(type="text_delta", delta=delta["content"])
+
+            for tc_delta in delta.get("tool_calls", []):
+                idx = tc_delta.get("index", 0)
+                is_new = idx not in seen_indices
+                if is_new:
+                    seen_indices.add(idx)
+                    yield StreamEvent(
+                        type="toolcall_start",
+                        content_index=idx,
+                        tool_call_id=tc_delta.get("id", ""),
+                        tool_name=tc_delta.get("function", {}).get("name", ""),
+                    )
+                func = tc_delta.get("function", {})
+                if func.get("arguments"):
+                    tool_args_len += len(func["arguments"])
+                    yield StreamEvent(
+                        type="toolcall_delta",
+                        content_index=idx,
+                        delta=func["arguments"],
+                    )
+
+        if not usage_found and (content_len or tool_args_len):
+            estimated = content_len // 4 + tool_args_len // 4
+            yield StreamEvent(type="usage", usage={
+                "prompt_tokens": 0,
+                "completion_tokens": max(estimated, 1),
+            })
+
+        yield StreamEvent(type="done")
 
     async def _stream_anthropic_events(
         self,
@@ -1376,14 +1311,15 @@ class LLMClient:
             raise KoiAPIError(f"Stream request failed: {e}", retryable=False)
 
     def _extract_usage_from_event(self, event: StreamEvent) -> None:
-        """Extract usage from a StreamEvent's usage dict (Anthropic format)."""
+        """Extract usage from a StreamEvent's usage dict (all formats)."""
         if not event.usage:
             return
+        u = event.usage
         self.usage.add(
-            input_t=event.usage.get("input_tokens", 0),
-            output_t=event.usage.get("output_tokens", 0),
-            cache_read=event.usage.get("cache_read_input_tokens", 0),
-            cache_creation=event.usage.get("cache_creation_input_tokens", 0),
+            input_t=u.get("input_tokens", 0) or u.get("prompt_tokens", 0),
+            output_t=u.get("output_tokens", 0) or u.get("completion_tokens", 0),
+            cache_read=u.get("cache_read_input_tokens", 0),
+            cache_creation=u.get("cache_creation_input_tokens", 0),
         )
 
     def abort_stream(self):

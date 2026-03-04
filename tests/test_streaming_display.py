@@ -87,8 +87,8 @@ def anthropic_client():
 # ── Responses API: text-only stream ──
 
 
-async def test_responses_stream_chat_sets_last_response_text(responses_client):
-    """stream_chat yields StreamEvent objects and stores text in _last_stream_response."""
+async def test_responses_stream_chat_yields_text_events(responses_client):
+    """stream_chat yields StreamEvent text_delta objects for Responses API."""
     lines = [
         'data: {"type":"response.output_text.delta","delta":"Hello"}',
         'data: {"type":"response.output_text.delta","delta":" world"}',
@@ -105,18 +105,13 @@ async def test_responses_stream_chat_sets_last_response_text(responses_client):
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
     assert text_deltas == ["Hello", " world"]
-    resp = responses_client._last_stream_response
-    assert resp is not None
-    msg = resp["choices"][0]["message"]
-    assert msg["content"] == "Hello world"
-    assert "tool_calls" not in msg
 
 
 # ── Responses API: tool call stream ──
 
 
-async def test_responses_stream_chat_sets_last_response_tool_calls(responses_client):
-    """stream_chat yields toolcall events and assembles tool_calls in _last_stream_response."""
+async def test_responses_stream_chat_yields_tool_call_events(responses_client):
+    """stream_chat yields toolcall events for Responses API."""
     lines = [
         'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"c1","name":"read_file"}}',
         'data: {"type":"response.function_call_arguments.delta","call_id":"c1","delta":"{\\"path\\": \\"/tmp/x\\"}"}',
@@ -134,21 +129,16 @@ async def test_responses_stream_chat_sets_last_response_tool_calls(responses_cli
     # Should have toolcall_start and toolcall_delta events
     types = [e.type for e in events]
     assert "toolcall_start" in types
-    resp = responses_client._last_stream_response
-    assert resp is not None
-    msg = resp["choices"][0]["message"]
-    assert "content" not in msg
-    assert len(msg["tool_calls"]) == 1
-    tc = msg["tool_calls"][0]
-    assert tc["function"]["name"] == "read_file"
-    assert json.loads(tc["function"]["arguments"]) == {"path": "/tmp/x"}
+    start = [e for e in events if e.type == "toolcall_start"][0]
+    assert start.tool_name == "read_file"
+    assert start.tool_call_id == "c1"
 
 
 # ── Responses API: response.completed event ──
 
 
 async def test_responses_stream_chat_uses_completed_event(responses_client):
-    """When response.completed fires, the converted response is used."""
+    """When response.completed fires, a usage event is yielded."""
     completed_response = {
         "id": "resp_123",
         "output": [
@@ -157,6 +147,7 @@ async def test_responses_stream_chat_uses_completed_event(responses_client):
                 "content": [{"type": "output_text", "text": "Done!"}],
             }
         ],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
     }
     lines = [
         'data: {"type":"response.output_text.delta","delta":"Done!"}',
@@ -173,18 +164,16 @@ async def test_responses_stream_chat_uses_completed_event(responses_client):
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
     assert text_deltas == ["Done!"]
-    resp = responses_client._last_stream_response
-    assert resp is not None
-    assert resp["id"] == "resp_123"
-    msg = resp["choices"][0]["message"]
-    assert msg["content"] == "Done!"
+    usage_events = [e for e in events if e.type == "usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].usage["input_tokens"] == 10
 
 
 # ── Chat Completions: text-only stream ──
 
 
-async def test_cc_stream_chat_sets_last_response_text(cc_client):
-    """Chat Completions stream_chat yields StreamEvent and stores response."""
+async def test_cc_stream_chat_yields_text_events(cc_client):
+    """Chat Completions stream_chat yields StreamEvent text_delta objects."""
     lines = [
         'data: {"choices":[{"delta":{"content":"Hi"}}]}',
         'data: {"choices":[{"delta":{"content":" there"}}]}',
@@ -201,18 +190,13 @@ async def test_cc_stream_chat_sets_last_response_text(cc_client):
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
     assert text_deltas == ["Hi", " there"]
-    resp = cc_client._last_stream_response
-    assert resp is not None
-    msg = resp["choices"][0]["message"]
-    assert msg["content"] == "Hi there"
-    assert "tool_calls" not in msg
 
 
 # ── Chat Completions: tool call stream ──
 
 
-async def test_cc_stream_chat_sets_last_response_tool_calls(cc_client):
-    """Chat Completions stream_chat yields toolcall events and assembles tool_calls."""
+async def test_cc_stream_chat_yields_tool_call_events(cc_client):
+    """Chat Completions stream_chat yields toolcall events."""
     lines = [
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc1","function":{"name":"run_command","arguments":""}}]}}]}',
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"cmd\\":"}}]}}]}',
@@ -230,20 +214,19 @@ async def test_cc_stream_chat_sets_last_response_tool_calls(cc_client):
 
     types = [e.type for e in events]
     assert "toolcall_start" in types
-    resp = cc_client._last_stream_response
-    assert resp is not None
-    msg = resp["choices"][0]["message"]
-    assert len(msg["tool_calls"]) == 1
-    tc = msg["tool_calls"][0]
-    assert tc["id"] == "tc1"
-    assert tc["function"]["name"] == "run_command"
-    assert json.loads(tc["function"]["arguments"]) == {"cmd": "ls"}
+    start = [e for e in events if e.type == "toolcall_start"][0]
+    assert start.tool_call_id == "tc1"
+    assert start.tool_name == "run_command"
+    # Verify arguments accumulated via deltas
+    deltas = [e for e in events if e.type == "toolcall_delta"]
+    args = "".join(e.delta for e in deltas)
+    assert json.loads(args) == {"cmd": "ls"}
 
 
 # ── Anthropic: text-only stream ──
 
 
-async def test_anthropic_stream_chat_sets_last_response_text(anthropic_client):
+async def test_anthropic_stream_chat_yields_text_events(anthropic_client):
     """Anthropic stream_chat yields StreamEvent objects."""
     lines = [
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
@@ -267,7 +250,7 @@ async def test_anthropic_stream_chat_sets_last_response_text(anthropic_client):
 # ── Anthropic: tool call stream ──
 
 
-async def test_anthropic_stream_chat_sets_last_response_tool_calls(anthropic_client):
+async def test_anthropic_stream_chat_yields_tool_call_events(anthropic_client):
     """Anthropic stream_chat yields toolcall events."""
     lines = [
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu1","name":"read_file"}}',
@@ -319,8 +302,8 @@ async def test_anthropic_stream_chat_skips_thinking(anthropic_client):
 # ── Empty stream ──
 
 
-async def test_empty_stream_sets_empty_response(responses_client):
-    """An empty stream produces an empty response in _last_stream_response."""
+async def test_empty_stream_yields_done_event(responses_client):
+    """An empty stream produces only a done event."""
     lines = ["data: [DONE]"]
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
@@ -331,21 +314,9 @@ async def test_empty_stream_sets_empty_response(responses_client):
     ):
         events.append(event)
 
-    assert events == []
-    resp = responses_client._last_stream_response
-    assert resp is not None
-    msg = resp["choices"][0]["message"]
-    assert msg["role"] == "assistant"
-    assert "content" not in msg
-    assert "tool_calls" not in msg
-
-
-# ── _last_stream_response is None before streaming ──
-
-
-async def test_last_stream_response_none_before_streaming(responses_client):
-    """_last_stream_response is None before any streaming call."""
-    assert responses_client._last_stream_response is None
+    # Should have a done event
+    types = [e.type for e in events]
+    assert "done" in types
 
 
 # ── agent._stream_response reasoning tag stripping ──

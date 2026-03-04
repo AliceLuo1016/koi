@@ -594,21 +594,13 @@ class Agent:
                 spinner.stop()
                 spinner = None
 
-            # Build response from events (Anthropic path) or use _last_stream_response
-            # as fallback for CC/Responses paths that still set it internally
-            if tool_calls or full_content:
-                message = {"role": "assistant"}
-                if full_content:
-                    message["content"] = full_content
-                if tool_calls:
-                    message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
-                response = {"choices": [{"message": message, "finish_reason": "stop"}]}
-            else:
-                response = self.llm_client._last_stream_response
-                if response is None:
-                    response = {
-                        "choices": [{"message": {"role": "assistant"}, "finish_reason": "stop"}]
-                    }
+            # Build response from accumulated events
+            message = {"role": "assistant"}
+            if full_content:
+                message["content"] = full_content
+            if tool_calls:
+                message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
+            response = {"choices": [{"message": message, "finish_reason": "stop"}]}
 
             # For reasoning tags mode: display after stripping tags
             if self.llm_client.use_reasoning_tags and collected_text:

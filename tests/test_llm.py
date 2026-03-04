@@ -703,20 +703,25 @@ async def test_retry_on_connect_error(client):
 # ── Streaming — Responses API ──
 
 
-async def test_stream_chat_assembles_text_deltas(client):
-    """_stream_chat accumulates output_text.delta events into content."""
+async def test_stream_responses_events_text_deltas(client):
+    """_stream_responses_events yields text_delta events."""
     lines = [
         'data: {"type": "response.output_text.delta", "delta": "Hello"}',
         'data: {"type": "response.output_text.delta", "delta": " world"}',
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await client._stream_chat("https://api.example.com", {})
-    assert result["choices"][0]["message"]["content"] == "Hello world"
+    events = []
+    async for event in client._stream_responses_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    text = "".join(e.delta for e in events if e.type == "text_delta")
+    assert text == "Hello world"
 
 
-async def test_stream_chat_assembles_tool_call(client):
-    """_stream_chat collects function_call name and argument deltas."""
+async def test_stream_responses_events_tool_call(client):
+    """_stream_responses_events yields toolcall events."""
     lines = [
         'data: {"type": "response.output_item.added", "item": {"type": "function_call", "call_id": "c1", "name": "read_file"}}',
         'data: {"type": "response.function_call_arguments.delta", "call_id": "c1", "delta": "{\\"path\\": "}',
@@ -724,16 +729,21 @@ async def test_stream_chat_assembles_tool_call(client):
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await client._stream_chat("https://api.example.com", {})
-    msg = result["choices"][0]["message"]
-    assert "tool_calls" in msg
-    tc = msg["tool_calls"][0]
-    assert tc["function"]["name"] == "read_file"
-    assert "x.txt" in tc["function"]["arguments"]
+    events = []
+    async for event in client._stream_responses_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    starts = [e for e in events if e.type == "toolcall_start"]
+    assert len(starts) == 1
+    assert starts[0].tool_name == "read_file"
+    deltas = [e for e in events if e.type == "toolcall_delta"]
+    args = "".join(e.delta for e in deltas)
+    assert "x.txt" in args
 
 
-async def test_stream_chat_response_completed_event(client):
-    """response.completed event triggers immediate return via _convert_response."""
+async def test_stream_responses_events_completed(client):
+    """response.completed event yields usage event."""
     completed_resp = {
         "id": "resp_1",
         "output": [
@@ -742,55 +752,79 @@ async def test_stream_chat_response_completed_event(client):
                 "content": [{"type": "output_text", "text": "Done!"}],
             }
         ],
+        "usage": {"input_tokens": 10, "output_tokens": 5},
     }
     lines = [
+        'data: {"type": "response.output_text.delta", "delta": "Done!"}',
         f'data: {{"type": "response.completed", "response": {_json.dumps(completed_resp)}}}',
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await client._stream_chat("https://api.example.com", {})
-    assert result["choices"][0]["message"]["content"] == "Done!"
+    events = []
+    async for event in client._stream_responses_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    text = "".join(e.delta for e in events if e.type == "text_delta")
+    assert text == "Done!"
+    usage_events = [e for e in events if e.type == "usage"]
+    assert len(usage_events) == 1
+    assert usage_events[0].usage["input_tokens"] == 10
 
 
-async def test_stream_chat_ignores_malformed_json(client):
-    """_stream_chat silently skips lines with invalid JSON."""
+async def test_stream_responses_events_ignores_malformed_json(client):
+    """_stream_responses_events silently skips lines with invalid JSON."""
     lines = [
         "data: NOT_JSON",
         'data: {"type": "response.output_text.delta", "delta": "ok"}',
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await client._stream_chat("https://api.example.com", {})
-    assert result["choices"][0]["message"]["content"] == "ok"
+    events = []
+    async for event in client._stream_responses_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    text = "".join(e.delta for e in events if e.type == "text_delta")
+    assert text == "ok"
 
 
 # ── Streaming — Chat Completions ──
 
 
-async def test_stream_chat_completions_assembles_text(cc_client):
-    """_stream_chat_completions accumulates content deltas."""
+async def test_stream_cc_events_assembles_text(cc_client):
+    """_stream_cc_events yields text_delta events."""
     lines = [
         'data: {"choices": [{"delta": {"content": "Hi"}}]}',
         'data: {"choices": [{"delta": {"content": " there"}}]}',
         "data: [DONE]",
     ]
     cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await cc_client._stream_chat_completions("https://api.example.com", {})
-    assert result["choices"][0]["message"]["content"] == "Hi there"
+    events = []
+    async for event in cc_client._stream_cc_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    text = "".join(e.delta for e in events if e.type == "text_delta")
+    assert text == "Hi there"
 
 
-async def test_stream_chat_completions_assembles_tool_calls(cc_client):
-    """_stream_chat_completions collects tool call deltas by index."""
+async def test_stream_cc_events_assembles_tool_calls(cc_client):
+    """_stream_cc_events yields toolcall events by index."""
     lines = [
         'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "read_file", "arguments": ""}}]}}]}',
         'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\\"path\\": \\"a.txt\\"}"}}]}}]}',
         "data: [DONE]",
     ]
     cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await cc_client._stream_chat_completions("https://api.example.com", {})
-    msg = result["choices"][0]["message"]
-    assert "tool_calls" in msg
-    assert msg["tool_calls"][0]["function"]["name"] == "read_file"
+    events = []
+    async for event in cc_client._stream_cc_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    starts = [e for e in events if e.type == "toolcall_start"]
+    assert len(starts) == 1
+    assert starts[0].tool_name == "read_file"
 
 
 # ── stream_chat token generator ──
@@ -1206,7 +1240,7 @@ async def test_stream_anthropic_skips_blank_and_malformed_lines():
 
 
 async def test_stream_cc_skips_blank_malformed_empty_choices():
-    """_stream_chat_completions skips blank, malformed JSON, and empty-choices lines."""
+    """_stream_cc_events skips blank, malformed JSON, and empty-choices lines."""
     cc2 = LLMClient(
         Config(
             api_base="https://api.example.com/v1/chat/completions",
@@ -1223,10 +1257,13 @@ async def test_stream_cc_skips_blank_malformed_empty_choices():
         "data: [DONE]",
     ]
     cc2.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await cc2._stream_chat_completions(
-        "https://api.example.com/v1/chat/completions", {}
-    )
-    assert result["choices"][0]["message"]["content"] == "world"
+    events = []
+    async for event in cc2._stream_cc_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    text = "".join(e.delta for e in events if e.type == "text_delta")
+    assert text == "world"
     await cc2.close()
 
 
@@ -1288,8 +1325,8 @@ async def test_stream_chat_http_error_raises_runtime_error(client):
     await client.close()
 
 
-async def test_stream_cc_tokens_http_error_raises_runtime_error(cc_client):
-    """_stream_chat_completions_tokens raises KoiServerError on HTTP 503."""
+async def test_stream_cc_events_http_error_raises_runtime_error(cc_client):
+    """_stream_cc_events raises KoiServerError on HTTP 503."""
     from koi.errors import KoiServerError
 
     mock_req = MagicMock()

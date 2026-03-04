@@ -308,7 +308,7 @@ class TestLLMClientUsageExtraction:
 
 class TestLLMClientStreamingUsage:
     async def test_streaming_responses_usage(self):
-        """Usage extracted from response.completed in Responses API streaming."""
+        """Usage extracted from response.completed via _stream_responses_events."""
         client = _make_client("responses")
         resp_json = json.dumps(
             {
@@ -328,15 +328,17 @@ class TestLLMClientStreamingUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            result = await client._stream_chat(
-                "https://api.example.com/v1/responses", {}
-            )
+            async for event in client._stream_responses_events(
+                [{"role": "user", "content": "hi"}]
+            ):
+                if event.type == "usage":
+                    client._extract_usage_from_event(event)
 
         assert client.usage.input_tokens == 150
         assert client.usage.output_tokens == 60
 
     async def test_streaming_cc_usage(self):
-        """Usage extracted from final chunk in Chat Completions streaming."""
+        """Usage extracted from final chunk via _stream_cc_events."""
         client = _make_client("chat_completions")
         lines = [
             'data: {"choices":[{"delta":{"content":"hi"}}]}',
@@ -345,9 +347,11 @@ class TestLLMClientStreamingUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            result = await client._stream_chat_completions(
-                "https://api.example.com/v1/chat/completions", {}
-            )
+            async for event in client._stream_cc_events(
+                [{"role": "user", "content": "hi"}]
+            ):
+                if event.type == "usage":
+                    client._extract_usage_from_event(event)
 
         assert client.usage.input_tokens == 200
         assert client.usage.output_tokens == 90
@@ -545,7 +549,7 @@ class TestStreamingFallbackUsage:
     """Test that usage is estimated when provider doesn't report it."""
 
     async def test_cc_stream_fallback_estimation(self):
-        """Chat Completions stream without usage → estimated from content."""
+        """Chat Completions stream without usage → estimated from content via events."""
         client = _make_client("chat_completions")
         client._stream_include_usage = False  # simulate provider doesn't support it
         lines = [
@@ -554,9 +558,11 @@ class TestStreamingFallbackUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            result = await client._parse_cc_stream(
-                _MockStreamResponse(lines)
-            )
+            async for event in client._stream_cc_events(
+                [{"role": "user", "content": "hi"}]
+            ):
+                if event.type == "usage":
+                    client._extract_usage_from_event(event)
 
         # Should have estimated output tokens (len("Hello world") // 4 = 2)
         assert client.usage.output_tokens >= 1
@@ -572,15 +578,17 @@ class TestStreamingFallbackUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            result = await client._parse_cc_stream(
-                _MockStreamResponse(lines)
-            )
+            async for event in client._stream_cc_events(
+                [{"role": "user", "content": "hi"}]
+            ):
+                if event.type == "usage":
+                    client._extract_usage_from_event(event)
 
         assert client.usage.input_tokens == 100
         assert client.usage.output_tokens == 50
 
     async def test_responses_stream_fallback_estimation(self):
-        """Responses API stream without response.completed → estimated."""
+        """Responses API stream without response.completed → estimated via events."""
         client = _make_client("responses")
         lines = [
             'data: {"type":"response.output_text.delta","delta":"Hello there!"}',
@@ -588,9 +596,11 @@ class TestStreamingFallbackUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            result = await client._stream_chat(
-                "https://api.example.com/v1/responses", {}
-            )
+            async for event in client._stream_responses_events(
+                [{"role": "user", "content": "hi"}]
+            ):
+                if event.type == "usage":
+                    client._extract_usage_from_event(event)
 
         # No response.completed → fallback estimation
         assert client.usage.output_tokens >= 1
@@ -616,13 +626,13 @@ class TestStreamingFallbackUsage:
             ])
 
         with patch.object(client.client, "stream", side_effect=mock_stream):
-            payload = {"model": "test", "stream": True, "stream_options": {"include_usage": True}}
-            result = await client._stream_chat_completions(
-                "https://api.example.com/v1/chat/completions", payload
-            )
+            events = []
+            async for event in client._stream_cc_events(
+                [{"role": "user", "content": "hi"}]
+            ):
+                events.append(event)
 
         assert client._stream_include_usage is False
-        assert "stream_options" not in payload
 
 
 # ── Import get_usage_history ──
