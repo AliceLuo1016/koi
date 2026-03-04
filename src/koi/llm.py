@@ -12,11 +12,8 @@ from .errors import (
     KoiOverloadedError, KoiServerError, KoiContextOverflowError,
     KoiConnectionError, classify_http_error, extract_retry_delay,
 )
+from .stream_events import StreamEvent
 from .usage import TokenUsage
-
-# Sentinel yielded by stream_chat when a tool-call block begins.
-# Allows the UI layer to show a spinner during tool-call argument generation.
-TOOL_CALL_START = '\x00__TOOL_CALL__\x00'
 
 # Anthropic thinking budget tokens by level
 _ANTHROPIC_THINKING_BUDGETS = {
@@ -626,7 +623,41 @@ class LLMClient:
         url = self.config.api_base.rstrip("/")
 
         if stream:
-            return await self._stream_anthropic(url, payload)
+            # Consume events directly — no separate _stream_anthropic method needed
+            full_content = ""
+            tool_calls: Dict[int, Dict[str, Any]] = {}
+
+            async for event in self._stream_anthropic_events(messages, tools, system_prompt=system_prompt):
+                if event.type == "text_delta":
+                    full_content += event.delta
+                elif event.type == "toolcall_start":
+                    idx = event.content_index
+                    tool_calls[idx] = {
+                        "id": event.tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": event.tool_name,
+                            "arguments": "",
+                        },
+                    }
+                elif event.type == "toolcall_delta":
+                    idx = event.content_index
+                    if idx in tool_calls:
+                        tool_calls[idx]["function"]["arguments"] += event.delta
+                elif event.type == "usage":
+                    self._extract_usage_from_event(event)
+
+            message: Dict[str, Any] = {"role": "assistant"}
+            if full_content:
+                message["content"] = full_content
+            if tool_calls:
+                message["tool_calls"] = [
+                    tool_calls[i] for i in sorted(tool_calls)
+                ]
+
+            return {
+                "choices": [{"message": message, "finish_reason": "stop"}]
+            }
 
         return await self._post_with_retries(url, payload, self._convert_anthropic_response)
 
@@ -925,108 +956,22 @@ class LLMClient:
             "choices": [{"message": message, "finish_reason": "stop"}]
         }
 
-    async def _stream_anthropic(
-        self, url: str, payload: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Handle Anthropic streaming and return assembled result."""
-        async with self.client.stream(
-            "POST", url, headers=self.headers, json=payload
-        ) as response:
-            self._active_stream_response = response
-            try:
-                response.raise_for_status()
-
-                full_content = ""
-                tool_calls: Dict[int, Dict[str, Any]] = {}
-                current_block_idx = -1
-                current_block_type = None
-
-                async for line in response.aiter_lines():
-                    if not line.strip() or not line.startswith("data: "):
-                        continue
-
-                    data_str = line[6:]
-                    if data_str.strip() == "[DONE]":
-                        break
-
-                    try:
-                        data = json.loads(data_str)
-                    except json.JSONDecodeError:
-                        continue
-
-                    event_type = data.get("type", "")
-
-                    if event_type == "message_start":
-                        msg = data.get("message", {})
-                        if "usage" in msg:
-                            self._extract_usage(msg, "anthropic")
-
-                    elif event_type == "message_delta":
-                        if "usage" in data:
-                            self._extract_usage(data, "anthropic")
-
-                    elif event_type == "content_block_start":
-                        current_block_idx = data.get("index", 0)
-                        block = data.get("content_block", {})
-                        current_block_type = block.get("type")
-                        if current_block_type == "tool_use":
-                            tool_calls[current_block_idx] = {
-                                "id": block.get("id", ""),
-                                "type": "function",
-                                "function": {
-                                    "name": block.get("name", ""),
-                                    "arguments": "",
-                                },
-                            }
-
-                    elif event_type == "content_block_delta":
-                        delta = data.get("delta", {})
-                        delta_type = delta.get("type")
-                        # Skip thinking deltas
-                        if delta_type == "thinking_delta":
-                            continue
-                        if delta_type == "text_delta":
-                            full_content += delta.get("text", "")
-                        elif delta_type == "input_json_delta":
-                            idx = data.get("index", current_block_idx)
-                            if idx in tool_calls:
-                                tool_calls[idx]["function"]["arguments"] += delta.get(
-                                    "partial_json", ""
-                                )
-
-                    elif event_type == "message_stop":
-                        break
-
-                message: Dict[str, Any] = {"role": "assistant"}
-                if full_content:
-                    message["content"] = full_content
-                if tool_calls:
-                    message["tool_calls"] = [
-                        tool_calls[i] for i in sorted(tool_calls)
-                    ]
-
-                return {
-                    "choices": [{"message": message, "finish_reason": "stop"}]
-                }
-            finally:
-                self._active_stream_response = None
-
     async def stream_chat(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None,
-    ) -> AsyncGenerator[str, None]:
-        """Yield text content token-by-token for live display.
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Yield StreamEvent objects from a streaming LLM response.
 
-        After iteration completes, the full assembled response (including
-        any tool_calls) is available via ``self._last_stream_response``.
+        The consumer (agent.py) is responsible for accumulating text,
+        tool calls, and assembling the final response dict.
         """
         self._last_stream_response = None
 
         if self.config.api_format == "anthropic":
-            async for token in self._stream_anthropic_tokens(messages, tools, system_prompt=system_prompt):
-                yield token
+            async for event in self._stream_anthropic_events(messages, tools, system_prompt=system_prompt):
+                yield event
             return
 
         if self.config.api_format == "chat_completions":
@@ -1089,7 +1034,7 @@ class LLMClient:
                         if event_type == "response.output_text.delta":
                             delta = data.get("delta", "")
                             full_content += delta
-                            yield delta
+                            yield StreamEvent(type="text_delta", delta=delta)
 
                         elif event_type == "response.function_call_arguments.delta":
                             cid = data.get("call_id", data.get("item_id", ""))
@@ -1100,11 +1045,11 @@ class LLMClient:
                                     "type": "function",
                                     "function": {"name": "", "arguments": ""},
                                 }
+                                yield StreamEvent(type="toolcall_start", tool_call_id=cid)
                             tool_calls[cid]["function"]["arguments"] += data.get(
                                 "delta", ""
                             )
-                            if is_new:
-                                yield TOOL_CALL_START
+                            yield StreamEvent(type="toolcall_delta", delta=data.get("delta", ""))
 
                         elif event_type in (
                             "response.function_call.name",
@@ -1113,16 +1058,19 @@ class LLMClient:
                             item = data.get("item", data)
                             if item.get("type") == "function_call":
                                 cid = item.get("call_id", item.get("id", ""))
+                                name = item.get("name", "")
                                 if cid not in tool_calls:
                                     tool_calls[cid] = {
                                         "id": cid,
                                         "type": "function",
                                         "function": {"name": "", "arguments": ""},
                                     }
-                                    yield TOOL_CALL_START
-                                tool_calls[cid]["function"]["name"] = item.get(
-                                    "name", ""
-                                )
+                                    yield StreamEvent(
+                                        type="toolcall_start",
+                                        tool_call_id=cid,
+                                        tool_name=name,
+                                    )
+                                tool_calls[cid]["function"]["name"] = name
 
                         elif event_type == "response.completed":
                             resp = data.get("response", {})
@@ -1158,8 +1106,8 @@ class LLMClient:
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None,
-    ) -> AsyncGenerator[str, None]:
-        """Yield text tokens from a Chat Completions streaming response.
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Yield StreamEvent objects from a Chat Completions streaming response.
 
         Also accumulates tool calls and stores the full assembled response
         in ``self._last_stream_response`` after the stream ends.
@@ -1202,7 +1150,7 @@ class LLMClient:
 
                         if "content" in delta and delta["content"]:
                             full_content += delta["content"]
-                            yield delta["content"]
+                            yield StreamEvent(type="text_delta", delta=delta["content"])
 
                         for tc_delta in delta.get("tool_calls", []):
                             idx = tc_delta.get("index", 0)
@@ -1223,7 +1171,18 @@ class LLMClient:
                                     "arguments"
                                 ]
                             if is_new:
-                                yield TOOL_CALL_START
+                                yield StreamEvent(
+                                    type="toolcall_start",
+                                    content_index=idx,
+                                    tool_call_id=tc_delta.get("id", ""),
+                                    tool_name=func.get("name", ""),
+                                )
+                            if func.get("arguments"):
+                                yield StreamEvent(
+                                    type="toolcall_delta",
+                                    content_index=idx,
+                                    delta=func["arguments"],
+                                )
                 finally:
                     self._active_stream_response = None
 
@@ -1247,16 +1206,17 @@ class LLMClient:
             "choices": [{"message": message, "finish_reason": "stop"}]
         }
 
-    async def _stream_anthropic_tokens(
+    async def _stream_anthropic_events(
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
         system_prompt: Optional[str] = None,
-    ) -> AsyncGenerator[str, None]:
-        """Yield text tokens from an Anthropic Messages streaming response.
+    ) -> AsyncGenerator[StreamEvent, None]:
+        """Yield StreamEvent objects from an Anthropic Messages streaming response.
 
-        Also accumulates tool calls and stores the full assembled response
-        in ``self._last_stream_response`` after the stream ends.
+        This is the unified event adapter for the Anthropic path. It handles
+        SSE parsing and yields structured events; the consumer handles
+        accumulation and response assembly.
         """
         system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(messages, system_prompt=system_prompt)
         system_value, anthropic_msgs = self._apply_prompt_caching(
@@ -1294,9 +1254,11 @@ class LLMClient:
 
         url = self.config.api_base.rstrip("/")
 
-        full_content = ""
-        tool_calls: Dict[int, Dict[str, Any]] = {}
-        current_block_idx = -1
+        # Track accumulated content per block for *_end events
+        block_content: Dict[int, str] = {}   # index → accumulated text/thinking
+        block_args: Dict[int, str] = {}      # index → accumulated tool arguments
+        block_types: Dict[int, str] = {}     # index → "text" | "thinking" | "tool_use"
+        block_meta: Dict[int, Dict] = {}     # index → {"name": ..., "id": ...} for tool blocks
 
         try:
             async with self.client.stream(
@@ -1323,44 +1285,82 @@ class LLMClient:
 
                         if event_type == "message_start":
                             msg = data.get("message", {})
-                            if "usage" in msg:
-                                self._extract_usage(msg, "anthropic")
+                            usage = msg.get("usage")
+                            if usage:
+                                yield StreamEvent(type="usage", usage=usage)
 
                         elif event_type == "message_delta":
-                            if "usage" in data:
-                                self._extract_usage(data, "anthropic")
+                            usage = data.get("usage")
+                            if usage:
+                                yield StreamEvent(type="usage", usage=usage)
 
                         elif event_type == "content_block_start":
-                            current_block_idx = data.get("index", 0)
+                            idx = data.get("index", 0)
                             block = data.get("content_block", {})
-                            if block.get("type") == "tool_use":
-                                tool_calls[current_block_idx] = {
+                            btype = block.get("type")
+                            block_types[idx] = btype
+                            block_content[idx] = ""
+                            if btype == "text":
+                                yield StreamEvent(type="text_start", content_index=idx)
+                            elif btype == "thinking":
+                                yield StreamEvent(type="thinking_start", content_index=idx)
+                            elif btype == "tool_use":
+                                block_args[idx] = ""
+                                block_meta[idx] = {
+                                    "name": block.get("name", ""),
                                     "id": block.get("id", ""),
-                                    "type": "function",
-                                    "function": {
-                                        "name": block.get("name", ""),
-                                        "arguments": "",
-                                    },
                                 }
-                                yield TOOL_CALL_START
+                                yield StreamEvent(
+                                    type="toolcall_start",
+                                    content_index=idx,
+                                    tool_name=block.get("name", ""),
+                                    tool_call_id=block.get("id", ""),
+                                )
 
                         elif event_type == "content_block_delta":
+                            idx = data.get("index", 0)
                             delta = data.get("delta", {})
                             delta_type = delta.get("type")
-                            if delta_type == "thinking_delta":
-                                continue
                             if delta_type == "text_delta":
                                 text = delta.get("text", "")
-                                full_content += text
-                                yield text
+                                block_content[idx] = block_content.get(idx, "") + text
+                                yield StreamEvent(type="text_delta", content_index=idx, delta=text)
+                            elif delta_type == "thinking_delta":
+                                thinking = delta.get("thinking", "")
+                                block_content[idx] = block_content.get(idx, "") + thinking
+                                yield StreamEvent(type="thinking_delta", content_index=idx, delta=thinking)
                             elif delta_type == "input_json_delta":
-                                idx = data.get("index", current_block_idx)
-                                if idx in tool_calls:
-                                    tool_calls[idx]["function"][
-                                        "arguments"
-                                    ] += delta.get("partial_json", "")
+                                partial = delta.get("partial_json", "")
+                                block_args[idx] = block_args.get(idx, "") + partial
+                                yield StreamEvent(type="toolcall_delta", content_index=idx, delta=partial)
+
+                        elif event_type == "content_block_stop":
+                            idx = data.get("index", 0)
+                            btype = block_types.get(idx)
+                            if btype == "text":
+                                yield StreamEvent(
+                                    type="text_end",
+                                    content_index=idx,
+                                    content=block_content.get(idx, ""),
+                                )
+                            elif btype == "thinking":
+                                yield StreamEvent(
+                                    type="thinking_end",
+                                    content_index=idx,
+                                    content=block_content.get(idx, ""),
+                                )
+                            elif btype == "tool_use":
+                                meta = block_meta.get(idx, {})
+                                yield StreamEvent(
+                                    type="toolcall_end",
+                                    content_index=idx,
+                                    tool_name=meta.get("name", ""),
+                                    tool_call_id=meta.get("id", ""),
+                                    arguments=block_args.get(idx, ""),
+                                )
 
                         elif event_type == "message_stop":
+                            yield StreamEvent(type="done", finish_reason="stop")
                             break
                 finally:
                     self._active_stream_response = None
@@ -1375,15 +1375,16 @@ class LLMClient:
         except Exception as e:
             raise KoiAPIError(f"Stream request failed: {e}", retryable=False)
 
-        message: Dict[str, Any] = {"role": "assistant"}
-        if full_content:
-            message["content"] = full_content
-        if tool_calls:
-            message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
-
-        self._last_stream_response = {
-            "choices": [{"message": message, "finish_reason": "stop"}]
-        }
+    def _extract_usage_from_event(self, event: StreamEvent) -> None:
+        """Extract usage from a StreamEvent's usage dict (Anthropic format)."""
+        if not event.usage:
+            return
+        self.usage.add(
+            input_t=event.usage.get("input_tokens", 0),
+            output_t=event.usage.get("output_tokens", 0),
+            cache_read=event.usage.get("cache_read_input_tokens", 0),
+            cache_creation=event.usage.get("cache_creation_input_tokens", 0),
+        )
 
     def abort_stream(self):
         """Abort any in-flight streaming response.

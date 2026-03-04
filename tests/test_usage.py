@@ -364,9 +364,15 @@ class TestLLMClientStreamingUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            result = await client._stream_anthropic(
-                "https://api.anthropic.com/v1/messages", {}
-            )
+            events = []
+            async for event in client._stream_anthropic_events(
+                [{"role": "user", "content": "hi"}]
+            ):
+                events.append(event)
+            # Extract usage from events
+            for event in events:
+                if event.type == "usage":
+                    client._extract_usage_from_event(event)
 
         assert client.usage.input_tokens == 400
         assert client.usage.output_tokens == 30
@@ -376,7 +382,7 @@ class TestLLMClientStreamingUsage:
         assert client.usage.total_requests == 2
 
     async def test_streaming_anthropic_tokens_usage(self):
-        """Usage extracted from _stream_anthropic_tokens generator."""
+        """Usage extracted from stream_chat (Anthropic events path)."""
         client = _make_client("anthropic", model="claude-sonnet-4")
         lines = [
             'data: {"type":"message_start","message":{"usage":{"input_tokens":300,"output_tokens":0}}}',
@@ -387,13 +393,16 @@ class TestLLMClientStreamingUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            tokens = []
-            async for t in client._stream_anthropic_tokens(
+            events = []
+            async for event in client.stream_chat(
                 [{"role": "user", "content": "hi"}]
             ):
-                tokens.append(t)
+                events.append(event)
+                if event.type == "usage":
+                    client._extract_usage_from_event(event)
 
-        assert tokens == ["world"]
+        text_deltas = [e.delta for e in events if e.type == "text_delta"]
+        assert text_deltas == ["world"]
         assert client.usage.input_tokens == 300
         assert client.usage.output_tokens == 20
 

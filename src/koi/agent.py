@@ -23,7 +23,7 @@ from .errors import (
     KoiAPIError, KoiRateLimitError, KoiAuthError, KoiBillingError,
     KoiServerError, KoiOverloadedError, KoiContextOverflowError, KoiConnectionError,
 )
-from .llm import LLMClient, TOOL_CALL_START
+from .llm import LLMClient
 from .memory import Memory
 from .skills import SkillsManager
 from .sandbox import Sandbox
@@ -542,46 +542,73 @@ class Agent:
         spinner = None
         try:
             collected_text = ""
+            full_content = ""
+            tool_calls = {}  # index/id → tool call dict
             first_token = True
 
             # Show spinner while waiting for first token
             spinner = console.status("  [dim]Thinking...[/dim]", spinner="dots")
             spinner.start()
 
-            async for token in self.llm_client.stream_chat(
+            async for event in self.llm_client.stream_chat(
                 messages, tools=tools, system_prompt=self.system_prompt
             ):
-                if token == TOOL_CALL_START:
+                if event.type == "text_delta":
+                    collected_text += event.delta
+                    full_content += event.delta
+                    if not self.llm_client.use_reasoning_tags:
+                        if first_token:
+                            spinner.stop()
+                            spinner = None
+                            console.print()  # blank line before response
+                            console.file.write("  ")  # indent agent response
+                            first_token = False
+                        console.file.write(event.delta)
+                        console.file.flush()
+
+                elif event.type == "toolcall_start":
                     if spinner is None:
-                        # Spinner was stopped after text — restart for tool call
                         spinner = console.status("  [dim]Preparing tool call...[/dim]", spinner="dots")
                         spinner.start()
                     else:
-                        # Spinner still active (no text yet) — update message
                         spinner.update("  [dim]Preparing tool call...[/dim]")
-                    continue
+                    idx = event.content_index
+                    tool_calls[idx] = {
+                        "id": event.tool_call_id or str(idx),
+                        "type": "function",
+                        "function": {"name": event.tool_name, "arguments": ""},
+                    }
 
-                collected_text += token
-                if not self.llm_client.use_reasoning_tags:
-                    if first_token:
-                        spinner.stop()
-                        spinner = None
-                        console.print()  # blank line before response
-                        console.file.write("  ")  # indent agent response
-                        first_token = False
-                    console.file.write(token)
-                    console.file.flush()
+                elif event.type == "toolcall_delta":
+                    idx = event.content_index
+                    if idx in tool_calls:
+                        tool_calls[idx]["function"]["arguments"] += event.delta
+
+                elif event.type == "usage":
+                    self.llm_client._extract_usage_from_event(event)
+
+                # thinking_delta, *_start, *_end, done — skip
 
             # Stop spinner in case no tokens were received, or reasoning-tags mode
             if spinner:
                 spinner.stop()
                 spinner = None
 
-            response = self.llm_client._last_stream_response
-            if response is None:
-                response = {
-                    "choices": [{"message": {"role": "assistant"}, "finish_reason": "stop"}]
-                }
+            # Build response from events (Anthropic path) or use _last_stream_response
+            # as fallback for CC/Responses paths that still set it internally
+            if tool_calls or full_content:
+                message = {"role": "assistant"}
+                if full_content:
+                    message["content"] = full_content
+                if tool_calls:
+                    message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
+                response = {"choices": [{"message": message, "finish_reason": "stop"}]}
+            else:
+                response = self.llm_client._last_stream_response
+                if response is None:
+                    response = {
+                        "choices": [{"message": {"role": "assistant"}, "finish_reason": "stop"}]
+                    }
 
             # For reasoning tags mode: display after stripping tags
             if self.llm_client.use_reasoning_tags and collected_text:

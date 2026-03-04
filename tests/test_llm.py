@@ -797,31 +797,34 @@ async def test_stream_chat_completions_assembles_tool_calls(cc_client):
 
 
 async def test_stream_chat_yields_tokens_responses_format(client):
-    """stream_chat() yields text tokens from output_text.delta events."""
+    """stream_chat() yields StreamEvent objects from output_text.delta events."""
+    from koi.stream_events import StreamEvent
     lines = [
         'data: {"type": "response.output_text.delta", "delta": "tok1"}',
         'data: {"type": "response.output_text.delta", "delta": "tok2"}',
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    tokens = []
-    async for token in client.stream_chat([{"role": "user", "content": "hi"}]):
-        tokens.append(token)
-    assert tokens == ["tok1", "tok2"]
+    events = []
+    async for event in client.stream_chat([{"role": "user", "content": "hi"}]):
+        events.append(event)
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["tok1", "tok2"]
 
 
 async def test_stream_chat_yields_tokens_cc_format(cc_client):
-    """stream_chat() yields tokens from Chat Completions delta content."""
+    """stream_chat() yields StreamEvent objects from Chat Completions delta content."""
     lines = [
         'data: {"choices": [{"delta": {"content": "A"}}]}',
         'data: {"choices": [{"delta": {"content": "B"}}]}',
         "data: [DONE]",
     ]
     cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    tokens = []
-    async for token in cc_client.stream_chat([{"role": "user", "content": "hi"}]):
-        tokens.append(token)
-    assert tokens == ["A", "B"]
+    events = []
+    async for event in cc_client.stream_chat([{"role": "user", "content": "hi"}]):
+        events.append(event)
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["A", "B"]
 
 
 # ── Anthropic Messages API ──
@@ -985,38 +988,40 @@ async def test_chat_routes_to_anthropic(anthropic_client):
     assert result["choices"][0]["message"]["content"] == "Hi!"
 
 
-async def test_stream_anthropic_assembles_text(anthropic_client):
-    """_stream_anthropic accumulates text_delta events."""
+async def test_stream_anthropic_events_assembles_text(anthropic_client):
+    """_stream_anthropic_events yields text_delta events."""
     lines = [
         '{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
         '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}',
         '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}}',
         '{"type": "message_stop"}',
     ]
-    # Anthropic doesn't use "data: " prefix for regular events but our code still filters for it
-    # Actually looking at the code, it does filter for "data: " - let me check the streaming code
     sse_lines = [f"data: {l}" for l in lines]
     anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(sse_lines)
-    result = await anthropic_client._stream_anthropic(
-        "https://api.anthropic.com/v1/messages", {}
-    )
-    assert result["choices"][0]["message"]["content"] == "Hello world"
+    events = []
+    async for event in anthropic_client._stream_anthropic_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert "".join(text_deltas) == "Hello world"
 
 
 async def test_stream_chat_yields_tokens_anthropic_format(anthropic_client):
-    """stream_chat() routes to _stream_anthropic_tokens for anthropic format."""
+    """stream_chat() yields StreamEvent objects for anthropic format."""
     lines = [
         'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok1"}}',
         'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok2"}}',
         "data: [DONE]",
     ]
     anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    tokens = []
-    async for token in anthropic_client.stream_chat(
+    events = []
+    async for event in anthropic_client.stream_chat(
         [{"role": "user", "content": "hi"}]
     ):
-        tokens.append(token)
-    assert tokens == ["tok1", "tok2"]
+        events.append(event)
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["tok1", "tok2"]
 
 
 async def test_chat_completions_url(cc_client):
@@ -1169,7 +1174,7 @@ async def test_retry_non_http_exception_raises_immediately(client):
 
 
 async def test_stream_anthropic_skips_blank_and_malformed_lines():
-    """_stream_anthropic silently skips blank, non-data, and malformed-JSON lines."""
+    """_stream_anthropic_events silently skips blank, non-data, and malformed-JSON lines."""
     config = Config(
         api_base="https://api.anthropic.com/v1/messages",
         api_key="test-key",
@@ -1187,10 +1192,13 @@ async def test_stream_anthropic_skips_blank_and_malformed_lines():
         'data: {"type": "message_stop"}',
     ]
     anthro_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
-    result = await anthro_client._stream_anthropic(
-        "https://api.anthropic.com/v1/messages", {}
-    )
-    assert result["choices"][0]["message"]["content"] == "hello"
+    events = []
+    async for event in anthro_client._stream_anthropic_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+    text = "".join(e.delta for e in events if e.type == "text_delta")
+    assert text == "hello"
     await anthro_client.close()
 
 

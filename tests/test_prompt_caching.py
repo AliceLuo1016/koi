@@ -387,12 +387,12 @@ async def test_streaming_anthropic_applies_cache_control():
 
     client.client.stream = capture_stream
 
-    tokens = []
-    async for tok in client.stream_chat(
+    events = []
+    async for event in client.stream_chat(
         [{"role": "user", "content": "hi"}],
         system_prompt="Be helpful.",
     ):
-        tokens.append(tok)
+        events.append(event)
 
     # System should be array with cache_control
     system = captured["system"]

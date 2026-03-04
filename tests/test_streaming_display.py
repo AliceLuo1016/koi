@@ -1,4 +1,4 @@
-"""Tests for streaming display — stream_chat sets _last_stream_response."""
+"""Tests for streaming display — stream_chat yields StreamEvent objects."""
 
 import json
 from unittest.mock import MagicMock, AsyncMock, patch
@@ -8,7 +8,8 @@ import httpx
 import pytest
 
 from koi.config import Config
-from koi.llm import LLMClient, TOOL_CALL_START
+from koi.llm import LLMClient
+from koi.stream_events import StreamEvent
 
 
 # ── Streaming helpers ──
@@ -87,7 +88,7 @@ def anthropic_client():
 
 
 async def test_responses_stream_chat_sets_last_response_text(responses_client):
-    """stream_chat yields text tokens and stores text in _last_stream_response."""
+    """stream_chat yields StreamEvent objects and stores text in _last_stream_response."""
     lines = [
         'data: {"type":"response.output_text.delta","delta":"Hello"}',
         'data: {"type":"response.output_text.delta","delta":" world"}',
@@ -96,13 +97,14 @@ async def test_responses_stream_chat_sets_last_response_text(responses_client):
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in responses_client.stream_chat(
+    events = []
+    async for event in responses_client.stream_chat(
         [{"role": "user", "content": "hi"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == ["Hello", " world"]
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["Hello", " world"]
     resp = responses_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]
@@ -114,7 +116,7 @@ async def test_responses_stream_chat_sets_last_response_text(responses_client):
 
 
 async def test_responses_stream_chat_sets_last_response_tool_calls(responses_client):
-    """stream_chat assembles tool_calls in _last_stream_response."""
+    """stream_chat yields toolcall events and assembles tool_calls in _last_stream_response."""
     lines = [
         'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"c1","name":"read_file"}}',
         'data: {"type":"response.function_call_arguments.delta","call_id":"c1","delta":"{\\"path\\": \\"/tmp/x\\"}"}',
@@ -123,14 +125,15 @@ async def test_responses_stream_chat_sets_last_response_tool_calls(responses_cli
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in responses_client.stream_chat(
+    events = []
+    async for event in responses_client.stream_chat(
         [{"role": "user", "content": "read /tmp/x"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    # Only sentinel token for tool calls, no text
-    assert tokens == [TOOL_CALL_START]
+    # Should have toolcall_start and toolcall_delta events
+    types = [e.type for e in events]
+    assert "toolcall_start" in types
     resp = responses_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]
@@ -162,13 +165,14 @@ async def test_responses_stream_chat_uses_completed_event(responses_client):
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in responses_client.stream_chat(
+    events = []
+    async for event in responses_client.stream_chat(
         [{"role": "user", "content": "do it"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == ["Done!"]
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["Done!"]
     resp = responses_client._last_stream_response
     assert resp is not None
     assert resp["id"] == "resp_123"
@@ -180,7 +184,7 @@ async def test_responses_stream_chat_uses_completed_event(responses_client):
 
 
 async def test_cc_stream_chat_sets_last_response_text(cc_client):
-    """Chat Completions stream_chat yields text and stores response."""
+    """Chat Completions stream_chat yields StreamEvent and stores response."""
     lines = [
         'data: {"choices":[{"delta":{"content":"Hi"}}]}',
         'data: {"choices":[{"delta":{"content":" there"}}]}',
@@ -189,13 +193,14 @@ async def test_cc_stream_chat_sets_last_response_text(cc_client):
 
     cc_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in cc_client.stream_chat(
+    events = []
+    async for event in cc_client.stream_chat(
         [{"role": "user", "content": "hello"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == ["Hi", " there"]
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["Hi", " there"]
     resp = cc_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]
@@ -207,7 +212,7 @@ async def test_cc_stream_chat_sets_last_response_text(cc_client):
 
 
 async def test_cc_stream_chat_sets_last_response_tool_calls(cc_client):
-    """Chat Completions stream_chat assembles tool_calls."""
+    """Chat Completions stream_chat yields toolcall events and assembles tool_calls."""
     lines = [
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc1","function":{"name":"run_command","arguments":""}}]}}]}',
         'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"cmd\\":"}}]}}]}',
@@ -217,13 +222,14 @@ async def test_cc_stream_chat_sets_last_response_tool_calls(cc_client):
 
     cc_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in cc_client.stream_chat(
+    events = []
+    async for event in cc_client.stream_chat(
         [{"role": "user", "content": "list files"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == [TOOL_CALL_START]
+    types = [e.type for e in events]
+    assert "toolcall_start" in types
     resp = cc_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]
@@ -238,7 +244,7 @@ async def test_cc_stream_chat_sets_last_response_tool_calls(cc_client):
 
 
 async def test_anthropic_stream_chat_sets_last_response_text(anthropic_client):
-    """Anthropic stream_chat yields text and stores response."""
+    """Anthropic stream_chat yields StreamEvent objects."""
     lines = [
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
         'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hey"}}',
@@ -248,25 +254,21 @@ async def test_anthropic_stream_chat_sets_last_response_text(anthropic_client):
 
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in anthropic_client.stream_chat(
+    events = []
+    async for event in anthropic_client.stream_chat(
         [{"role": "user", "content": "hi"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == ["Hey", "!"]
-    resp = anthropic_client._last_stream_response
-    assert resp is not None
-    msg = resp["choices"][0]["message"]
-    assert msg["content"] == "Hey!"
-    assert "tool_calls" not in msg
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["Hey", "!"]
 
 
 # ── Anthropic: tool call stream ──
 
 
 async def test_anthropic_stream_chat_sets_last_response_tool_calls(anthropic_client):
-    """Anthropic stream_chat assembles tool_calls."""
+    """Anthropic stream_chat yields toolcall events."""
     lines = [
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu1","name":"read_file"}}',
         'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}',
@@ -276,27 +278,24 @@ async def test_anthropic_stream_chat_sets_last_response_tool_calls(anthropic_cli
 
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in anthropic_client.stream_chat(
+    events = []
+    async for event in anthropic_client.stream_chat(
         [{"role": "user", "content": "read /x"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == [TOOL_CALL_START]
-    resp = anthropic_client._last_stream_response
-    assert resp is not None
-    msg = resp["choices"][0]["message"]
-    assert len(msg["tool_calls"]) == 1
-    tc = msg["tool_calls"][0]
-    assert tc["function"]["name"] == "read_file"
-    assert tc["function"]["arguments"] == '{"path": "/x"}'
+    types = [e.type for e in events]
+    assert "toolcall_start" in types
+    start = [e for e in events if e.type == "toolcall_start"][0]
+    assert start.tool_name == "read_file"
+    assert start.tool_call_id == "tu1"
 
 
 # ── Anthropic: thinking deltas are skipped ──
 
 
 async def test_anthropic_stream_chat_skips_thinking(anthropic_client):
-    """Thinking deltas are not yielded as text tokens."""
+    """Thinking events are yielded as thinking_delta, text as text_delta."""
     lines = [
         'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
         'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"internal reasoning"}}',
@@ -307,16 +306,14 @@ async def test_anthropic_stream_chat_skips_thinking(anthropic_client):
 
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in anthropic_client.stream_chat(
+    events = []
+    async for event in anthropic_client.stream_chat(
         [{"role": "user", "content": "think about this"}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == ["Answer"]
-    resp = anthropic_client._last_stream_response
-    msg = resp["choices"][0]["message"]
-    assert msg["content"] == "Answer"
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["Answer"]
 
 
 # ── Empty stream ──
@@ -328,13 +325,13 @@ async def test_empty_stream_sets_empty_response(responses_client):
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
-    tokens = []
-    async for token in responses_client.stream_chat(
+    events = []
+    async for event in responses_client.stream_chat(
         [{"role": "user", "content": ""}]
     ):
-        tokens.append(token)
+        events.append(event)
 
-    assert tokens == []
+    assert events == []
     resp = responses_client._last_stream_response
     assert resp is not None
     msg = resp["choices"][0]["message"]
@@ -369,24 +366,13 @@ async def test_stream_response_strips_reasoning_tags():
     # Simulate reasoning tag mode
     agent.llm_client.use_reasoning_tags = True
 
-    # Mock stream_chat to yield tokens that include think/final tags
+    # Mock stream_chat to yield StreamEvent objects
     async def mock_stream_chat(messages, tools=None, system_prompt=None):
         text = "<think>internal</think><final>visible answer</final>"
         for ch in [text[:7], text[7:25], text[25:]]:
-            yield ch
+            yield StreamEvent(type="text_delta", delta=ch)
 
     agent.llm_client.stream_chat = mock_stream_chat
-    agent.llm_client._last_stream_response = {
-        "choices": [
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": "<think>internal</think><final>visible answer</final>",
-                },
-                "finish_reason": "stop",
-            }
-        ]
-    }
 
     response = await agent._stream_response(
         [{"role": "user", "content": "test"}], []
@@ -395,3 +381,168 @@ async def test_stream_response_strips_reasoning_tags():
     assert response is not None
     msg = response["choices"][0]["message"]
     assert msg["content"] == "<think>internal</think><final>visible answer</final>"
+
+
+# ── StreamEvent: Anthropic text response ──
+
+
+async def test_anthropic_stream_events_text(anthropic_client):
+    """_stream_anthropic_events yields text_start, text_delta, text_end, done."""
+    lines = [
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}',
+        'data: {"type":"content_block_stop","index":0}',
+        'data: {"type":"message_stop"}',
+    ]
+
+    anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
+
+    events = []
+    async for event in anthropic_client._stream_anthropic_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+
+    types = [e.type for e in events]
+    assert types == ["text_start", "text_delta", "text_delta", "text_end", "done"]
+
+    # Check text_delta contents
+    deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert deltas == ["Hello", " world"]
+
+    # Check text_end has full accumulated content
+    text_end = [e for e in events if e.type == "text_end"][0]
+    assert text_end.content == "Hello world"
+
+    # Check done event
+    done = [e for e in events if e.type == "done"][0]
+    assert done.finish_reason == "stop"
+
+
+# ── StreamEvent: Anthropic tool call ──
+
+
+async def test_anthropic_stream_events_tool_call(anthropic_client):
+    """_stream_anthropic_events yields toolcall_start, toolcall_delta, toolcall_end, done."""
+    lines = [
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu1","name":"read_file"}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \\"/x\\"}"}}',
+        'data: {"type":"content_block_stop","index":0}',
+        'data: {"type":"message_stop"}',
+    ]
+
+    anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
+
+    events = []
+    async for event in anthropic_client._stream_anthropic_events(
+        [{"role": "user", "content": "read /x"}]
+    ):
+        events.append(event)
+
+    types = [e.type for e in events]
+    assert types == ["toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_end", "done"]
+
+    # Check toolcall_start
+    start = events[0]
+    assert start.tool_name == "read_file"
+    assert start.tool_call_id == "tu1"
+
+    # Check toolcall_end has full arguments
+    end = [e for e in events if e.type == "toolcall_end"][0]
+    assert end.tool_name == "read_file"
+    assert end.tool_call_id == "tu1"
+    assert end.arguments == '{"path": "/x"}'
+
+
+# ── StreamEvent: thinking skipped in stream_chat ──
+
+
+async def test_anthropic_stream_events_thinking_skipped_in_stream_chat(anthropic_client):
+    """stream_chat yields all events including thinking; consumer filters."""
+    lines = [
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"internal reasoning"}}',
+        'data: {"type":"content_block_stop","index":0}',
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
+        'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}}',
+        'data: {"type":"content_block_stop","index":1}',
+        'data: {"type":"message_stop"}',
+    ]
+
+    anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
+
+    events = []
+    async for event in anthropic_client.stream_chat(
+        [{"role": "user", "content": "think about this"}]
+    ):
+        events.append(event)
+
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["Answer"]
+    # Thinking events are also present
+    thinking_deltas = [e.delta for e in events if e.type == "thinking_delta"]
+    assert thinking_deltas == ["internal reasoning"]
+
+
+# ── StreamEvent: usage event ──
+
+
+async def test_anthropic_stream_events_usage(anthropic_client):
+    """usage events carry correct token counts."""
+    lines = [
+        'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}}',
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+        'data: {"type":"content_block_stop","index":0}',
+        'data: {"type":"message_delta","usage":{"output_tokens":3}}',
+        'data: {"type":"message_stop"}',
+    ]
+
+    anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
+
+    events = []
+    async for event in anthropic_client._stream_anthropic_events(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+
+    usage_events = [e for e in events if e.type == "usage"]
+    assert len(usage_events) == 2
+
+    # First usage from message_start
+    u0 = usage_events[0].usage
+    assert u0["input_tokens"] == 10
+    assert u0["cache_read_input_tokens"] == 5
+    assert u0["cache_creation_input_tokens"] == 2
+
+    # Second usage from message_delta
+    u1 = usage_events[1].usage
+    assert u1["output_tokens"] == 3
+
+
+# ── StreamEvent: backward compat with stream_chat ──
+
+
+async def test_anthropic_stream_chat_yields_events(anthropic_client):
+    """stream_chat yields StreamEvent objects with correct types and deltas."""
+    lines = [
+        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hey"}}',
+        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}',
+        'data: {"type":"message_stop"}',
+    ]
+
+    anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
+
+    events = []
+    async for event in anthropic_client.stream_chat(
+        [{"role": "user", "content": "hi"}]
+    ):
+        events.append(event)
+
+    text_deltas = [e.delta for e in events if e.type == "text_delta"]
+    assert text_deltas == ["Hey", "!"]
+    # All events are StreamEvent instances
+    assert all(isinstance(e, StreamEvent) for e in events)
