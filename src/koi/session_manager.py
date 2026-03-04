@@ -22,7 +22,7 @@ class SessionManager:
     - model_change: Model switch event
     """
 
-    VERSION = 1
+    VERSION = 2
 
     def __init__(self, koi_dir: Path, session_path: Optional[Path] = None):
         """Initialize SessionManager.
@@ -38,6 +38,8 @@ class SessionManager:
         self._file = None
         self._path: Optional[Path] = None
         self._session_id: Optional[str] = None
+        self._entry_ids: set = set()
+        self._leaf_id: Optional[str] = None
 
         if session_path:
             self._path = session_path
@@ -50,6 +52,10 @@ class SessionManager:
     @property
     def session_path(self) -> Optional[Path]:
         return self._path
+
+    @property
+    def leaf_id(self) -> Optional[str]:
+        return self._leaf_id
 
     def start_session(self, model: str, cwd: Optional[str] = None) -> str:
         """Start a new session. Writes the session header.
@@ -76,9 +82,29 @@ class SessionManager:
         return self._session_id
 
     def resume_session(self) -> None:
-        """Open an existing session file for appending."""
+        """Open an existing session file for appending.
+
+        Also populates _entry_ids and _leaf_id from existing entries
+        so that new entries chain correctly via parentId.
+        """
         if not self._path or not self._path.exists():
             raise FileNotFoundError(f"Session file not found: {self._path}")
+
+        if not self._entry_ids:
+            with open(self._path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+                    eid = entry.get("id")
+                    if eid and entry.get("type") != "session":
+                        self._entry_ids.add(eid)
+                        self._leaf_id = eid
+
         self._file = open(self._path, "a", encoding="utf-8")
 
     def save_message(self, message: Dict[str, Any]) -> None:
@@ -110,23 +136,18 @@ class SessionManager:
         }
         self._write_entry(entry)
 
-    def load_session(self, path: Optional[Path] = None) -> Dict[str, Any]:
+    def load_session(self, path: Optional[Path] = None, leaf_id: Optional[str] = None) -> Dict[str, Any]:
         """Load a session from a JSONL file.
 
-        Returns a dict with:
-        - header: session header dict
-        - messages: list of message dicts (ready for agent.messages)
-        - compactions: list of compaction dicts
-        - model_changes: list of model change dicts
+        If leaf_id is provided, walks from that entry to root to get the active branch.
+        Otherwise uses the last entry as the leaf (default linear behavior).
         """
         target = path or self._path
         if not target or not target.exists():
             raise FileNotFoundError(f"Session file not found: {target}")
 
         header = None
-        messages = []
-        compactions = []
-        model_changes = []
+        all_entries = []
 
         with open(target, "r", encoding="utf-8") as f:
             for line in f:
@@ -138,15 +159,47 @@ class SessionManager:
                 except json.JSONDecodeError:
                     continue
 
-                entry_type = entry.get("type")
-                if entry_type == "session":
+                if entry.get("type") == "session":
                     header = entry
-                elif entry_type == "message":
-                    messages.append(entry["message"])
-                elif entry_type == "compaction":
-                    compactions.append(entry)
-                elif entry_type == "model_change":
-                    model_changes.append(entry)
+                else:
+                    all_entries.append(entry)
+
+        by_id = {e["id"]: e for e in all_entries if "id" in e}
+
+        if leaf_id and leaf_id in by_id:
+            leaf = by_id[leaf_id]
+        elif all_entries:
+            leaf = all_entries[-1]
+        else:
+            leaf = None
+
+        if leaf and "id" in leaf:
+            branch = []
+            current = leaf
+            while current:
+                branch.append(current)
+                pid = current.get("parentId")
+                current = by_id.get(pid) if pid else None
+            branch.reverse()
+        else:
+            branch = all_entries
+
+        messages = []
+        compactions = []
+        model_changes = []
+
+        for entry in branch:
+            entry_type = entry.get("type")
+            if entry_type == "message":
+                messages.append(entry["message"])
+            elif entry_type == "compaction":
+                compactions.append(entry)
+            elif entry_type == "model_change":
+                model_changes.append(entry)
+
+        self._entry_ids = {e["id"] for e in all_entries if "id" in e}
+        if leaf and "id" in leaf:
+            self._leaf_id = leaf["id"]
 
         return {
             "header": header,
@@ -154,6 +207,48 @@ class SessionManager:
             "compactions": compactions,
             "model_changes": model_changes,
         }
+
+    def fork(self, fork_from_id: Optional[str] = None) -> None:
+        """Fork the session from a specific entry (or current leaf).
+
+        After forking, new entries will branch from the fork point.
+        The session file stays the same -- branching is in-place via parentId.
+        """
+        if fork_from_id:
+            if fork_from_id not in self._entry_ids:
+                raise ValueError(f"Entry ID not found: {fork_from_id}")
+            self._leaf_id = fork_from_id
+
+    def get_branches(self, path: Optional[Path] = None) -> List[Dict[str, Any]]:
+        """Get entries that have multiple children (branch points).
+
+        Returns list of entry dicts that are parentId of more than one entry.
+        """
+        target = path or self._path
+        if not target or not target.exists():
+            return []
+
+        all_entries = []
+        with open(target, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if entry.get("type") != "session" and "id" in entry:
+                    all_entries.append(entry)
+
+        children_count: Dict[str, int] = {}
+        for e in all_entries:
+            pid = e.get("parentId")
+            if pid:
+                children_count[pid] = children_count.get(pid, 0) + 1
+
+        by_id = {e["id"]: e for e in all_entries}
+        return [by_id[eid] for eid in children_count if children_count[eid] > 1 and eid in by_id]
 
     def list_sessions(self, limit: int = 20) -> List[Dict[str, Any]]:
         """List recent sessions with metadata.
@@ -167,7 +262,6 @@ class SessionManager:
         if not self._sessions_dir.exists():
             return sessions
 
-        # Sort by filename (which starts with timestamp) descending
         files = sorted(
             self._sessions_dir.glob("*.jsonl"),
             key=lambda f: f.name,
@@ -184,7 +278,6 @@ class SessionManager:
                     if header.get("type") != "session":
                         continue
 
-                    # Count messages
                     message_count = 0
                     for line in fh:
                         line = line.strip()
@@ -218,17 +311,6 @@ class SessionManager:
 
         return files[0] if files else None
 
-    def fork_session(self, messages: List[Dict[str, Any]], model: str, cwd: Optional[str] = None) -> str:
-        """Fork: close current session, create a new one with copied messages.
-
-        Returns the new session ID.
-        """
-        self.close()
-        new_id = self.start_session(model=model, cwd=cwd)
-        for msg in messages:
-            self.save_message(msg)
-        return new_id
-
     def close(self) -> None:
         """Flush and close the session file."""
         if self._file:
@@ -236,16 +318,28 @@ class SessionManager:
             self._file.close()
             self._file = None
 
+    def _generate_id(self) -> str:
+        """Generate a unique 8-char hex entry ID."""
+        while True:
+            eid = uuid.uuid4().hex[:8]
+            if eid not in self._entry_ids:
+                self._entry_ids.add(eid)
+                return eid
+
     def _write_entry(self, entry: Dict[str, Any]) -> None:
         """Write a single JSONL entry."""
         if self._file is None:
             return
+        if entry.get("type") != "session":
+            entry["id"] = self._generate_id()
+            entry["parentId"] = self._leaf_id
+            self._leaf_id = entry["id"]
         self._file.write(json.dumps(entry, default=str) + "\n")
         self._file.flush()
 
     @staticmethod
     def _extract_session_id(path: Path) -> str:
         """Extract session ID from filename like 20260303_211500_abc123def456.jsonl"""
-        stem = path.stem  # e.g. "20260303_211500_abc123def456"
+        stem = path.stem
         parts = stem.split("_")
         return parts[-1] if len(parts) >= 3 else stem

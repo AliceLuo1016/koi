@@ -733,12 +733,8 @@ class Agent:
             if self._ephemeral:
                 console.print("Cannot fork in ephemeral mode.", style="yellow")
             else:
-                new_id = self.session_manager.fork_session(
-                    messages=self.messages,
-                    model=self.config.model,
-                    cwd=str(Path.cwd()),
-                )
-                console.print(f"🔀 Forked session → {new_id}. Continuing in new branch.", style="green")
+                self.session_manager.fork()
+                console.print("🔀 Forked session. New messages will branch from here.", style="green")
 
         else:
             console.print(f"Unknown command: {command}", style="red")
@@ -794,7 +790,7 @@ class Agent:
 - /stats          - Alias for /status
 - /usage          - Show detailed token usage and estimated cost
 - /new             - Start a new session (clear context)
-- /fork            - Fork into a new session (keeps current messages)
+- /fork            - Fork session (branch from current point)
 
 [cyan]Usage:[/cyan]
 Just type your requests normally and I'll help you with tasks using available tools.
