@@ -33,6 +33,7 @@ from .prompts import build_system_prompt, build_tool_result_message
 from .compaction import ContextCompactor
 from .context_pruning import prune_context
 from .context_guard import enforce_context_budget
+from .session_manager import SessionManager
 from .transcript import TranscriptLogger
 from .usage import log_usage, estimate_cost
 
@@ -147,6 +148,10 @@ class Agent:
                 self.system_prompt.encode()
             ).hexdigest()[:16],
         })
+
+        # Session persistence (always on)
+        self.session_manager = SessionManager(koi_dir)
+        self._ephemeral = False  # Set True for --no-session mode
     
     async def run_interactive(self):
         """Run interactive agent session."""
@@ -162,10 +167,17 @@ class Agent:
             self.subagent_manager.force_kill_all_sync()
             if self.llm_client.usage.total_requests > 0:
                 log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
+            if not self._ephemeral:
+                self.session_manager.close()
 
         atexit.register(_atexit_cleanup)
 
         self._print_session_header()
+        if not self._ephemeral:
+            self.session_manager.start_session(
+                model=self.config.model,
+                cwd=str(Path.cwd()),
+            )
         console.print("  Type [dim]/help[/dim] for commands, [dim]/exit[/dim] to quit, [dim]Alt+Enter[/dim] for newline")
         console.print()
 
@@ -196,6 +208,8 @@ class Agent:
                 user_msg = {"role": "user", "content": user_input}
                 self.messages.append(user_msg)
                 self.transcript.log_message("user_message", user_msg)
+                if not self._ephemeral:
+                    self.session_manager.save_message(user_msg)
 
                 # Run agent loop as a cancellable task
                 self._interrupted = False
@@ -224,8 +238,10 @@ class Agent:
                 console.print()
                 console.print(self.llm_client.usage.summary(self.config.model), style="dim")
                 log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
+            if not self._ephemeral:
+                self.session_manager.close()
             await self.llm_client.close()
-    
+
     async def run_task(self, task: str, non_interactive: bool = False):
         """Run a specific task (for cron jobs)."""
         if non_interactive:
@@ -237,11 +253,17 @@ class Agent:
         else:
             console.print(f"🐠 [bold cyan]Koi Agent[/bold cyan] - Running task: {task}")
 
+        if not self._ephemeral:
+            self.session_manager.start_session(
+                model=self.config.model,
+                cwd=str(Path.cwd()),
+            )
+
         # Add task as user message
-        self.messages.append({
-            "role": "user",
-            "content": task
-        })
+        task_msg = {"role": "user", "content": task}
+        self.messages.append(task_msg)
+        if not self._ephemeral:
+            self.session_manager.save_message(task_msg)
 
         try:
             # Run agent loop as a cancellable task
@@ -380,6 +402,8 @@ class Agent:
 
                 try:
                     self.messages = await self.compactor.compact_messages(self.messages)
+                    if not self._ephemeral:
+                        self.session_manager.save_compaction("Auto-compaction", tokens_before=0)
                 except asyncio.CancelledError:
                     # Compaction cancelled — keep original messages, re-raise
                     raise
@@ -410,7 +434,9 @@ class Agent:
                 if message.get("tool_calls"):
                     # Add assistant message with tool calls
                     self.messages.append(message)
-                    
+                    if not self._ephemeral:
+                        self.session_manager.save_message(message)
+
                     # Execute tools
                     for tool_call in message["tool_calls"]:
                         func_name = tool_call["function"]["name"]
@@ -465,7 +491,9 @@ class Agent:
                         # Add tool result message
                         tool_result_msg = build_tool_result_message(tool_call, result, self.config.context_window)
                         self.messages.append(tool_result_msg)
-                    
+                        if not self._ephemeral:
+                            self.session_manager.save_message(tool_result_msg)
+
                     # Continue the loop to let model process tool results
                     continue
                 
@@ -473,6 +501,8 @@ class Agent:
                     # Final text response
                     content = message.get("content")
                     self.messages.append(message)
+                    if not self._ephemeral:
+                        self.session_manager.save_message(message)
                     if non_interactive and content:
                         # Non-interactive: display text (strip tags if needed)
                         if self.llm_client.use_reasoning_tags:
@@ -503,6 +533,8 @@ class Agent:
                 if not _overflow_retried:
                     console.print("📏 Context too long, auto-compacting...", style="yellow")
                     self.messages = await self.compactor.compact_messages(self.messages)
+                    if not self._ephemeral:
+                        self.session_manager.save_compaction("Overflow auto-compaction", tokens_before=0)
                     _overflow_retried = True
                     continue
                 else:
@@ -658,6 +690,8 @@ class Agent:
             if len(self.messages) > 2:
                 console.print("🔄 Compacting conversation...", style="yellow")
                 self.messages = await self.compactor.compact_messages(self.messages)
+                if not self._ephemeral:
+                    self.session_manager.save_compaction("Manual compaction", tokens_before=0)
                 console.print("✅ Conversation compacted", style="green")
             else:
                 console.print("Not enough messages to compact.", style="yellow")
@@ -687,6 +721,12 @@ class Agent:
         elif cmd == '/new':
             self.messages.clear()
             self.compactor.compaction_count = 0
+            if not self._ephemeral:
+                self.session_manager.close()
+                self.session_manager.start_session(
+                    model=self.config.model,
+                    cwd=str(Path.cwd()),
+                )
             console.print("🆕 New session started. Context cleared.", style="green")
 
         else:
@@ -889,3 +929,17 @@ Just type your requests normally and I'll help you with tasks using available to
         # Reprint prompt so user knows they can type
         console.file.write("koi> ")
         console.file.flush()
+
+    def resume_from_session(self, session_path: Path) -> None:
+        """Load messages from a saved session file."""
+        self.session_manager = SessionManager(
+            Path.cwd() / ".koi",
+            session_path=session_path,
+        )
+        data = self.session_manager.load_session()
+        self.messages = data["messages"]
+
+        # Show what was loaded
+        msg_count = len(self.messages)
+        model = data["header"].get("model", "unknown") if data["header"] else "unknown"
+        console.print(f"📂 Resumed session: {msg_count} messages (model: {model})", style="dim cyan")

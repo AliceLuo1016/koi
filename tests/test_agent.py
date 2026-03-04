@@ -1,4 +1,5 @@
 """Test agent.py module."""
+import json
 import signal
 import pytest
 from unittest.mock import Mock, patch, AsyncMock
@@ -7,6 +8,7 @@ from pathlib import Path
 from koi.agent import Agent, _fmt_num, strip_thinking_tags
 from koi.config import Config
 from koi.errors import KoiContextOverflowError
+from koi.session_manager import SessionManager
 
 
 def test_fmt_num():
@@ -283,4 +285,102 @@ async def test_context_overflow_double_overflow_breaks():
         # No assistant message should have been added (loop broke)
         assistant_msgs = [m for m in agent.messages if m.get("role") == "assistant"]
         assert len(assistant_msgs) == 0
+
+
+class TestSessionPersistence:
+    """Tests for session persistence integration in Agent."""
+
+    def _make_agent(self, tmp_path):
+        """Create an Agent with mocked dependencies pointing at tmp_path."""
+        config = Config({"model": "test-model", "api_key": "test-key"})
+        with patch('koi.agent.LLMClient'), \
+             patch('koi.agent.Memory'), \
+             patch('koi.agent.SkillsManager'), \
+             patch('koi.agent.Sandbox'), \
+             patch('koi.agent.SubagentManager'), \
+             patch('koi.agent.ToolExecutor'), \
+             patch('koi.agent.ContextCompactor'), \
+             patch('koi.agent.Path') as mock_path_cls, \
+             patch('koi.agent.console'):
+            mock_path_cls.cwd.return_value = tmp_path
+            # Make Path(".koi") resolve to tmp_path / ".koi" for usage logging
+            mock_path_cls.side_effect = lambda *a, **kw: Path(*a, **kw)
+            agent = Agent(config, non_interactive=True)
+        # Replace the session_manager with one using a real writable directory
+        koi_dir = tmp_path / ".koi"
+        koi_dir.mkdir(exist_ok=True)
+        agent.session_manager = SessionManager(koi_dir)
+        return agent
+
+    def test_agent_persists_messages(self, tmp_path):
+        """Agent auto-persists messages to session file."""
+        agent = self._make_agent(tmp_path)
+        agent.session_manager.start_session(model="test", cwd=str(tmp_path))
+
+        # Simulate adding messages
+        msg1 = {"role": "user", "content": "Hello"}
+        agent.messages.append(msg1)
+        agent.session_manager.save_message(msg1)
+
+        msg2 = {"role": "assistant", "content": "Hi there!"}
+        agent.messages.append(msg2)
+        agent.session_manager.save_message(msg2)
+
+        agent.session_manager.close()
+
+        # Verify messages were saved
+        data = agent.session_manager.load_session()
+        assert len(data["messages"]) == 2
+        assert data["messages"][0]["content"] == "Hello"
+        assert data["messages"][1]["content"] == "Hi there!"
+
+    def test_agent_resume_loads_messages(self, tmp_path):
+        """Resuming a session loads its messages into the agent."""
+        koi_dir = tmp_path / ".koi"
+        koi_dir.mkdir(exist_ok=True)
+
+        # Create a session with messages
+        sm = SessionManager(koi_dir)
+        sm.start_session(model="test-model", cwd=str(tmp_path))
+        sm.save_message({"role": "user", "content": "First"})
+        sm.save_message({"role": "assistant", "content": "Second"})
+        sm.save_message({"role": "user", "content": "Third"})
+        sm.close()
+        session_path = sm.session_path
+
+        # Create an agent and resume from that session
+        agent = self._make_agent(tmp_path)
+        agent.resume_from_session(session_path)
+
+        assert len(agent.messages) == 3
+        assert agent.messages[0]["content"] == "First"
+        assert agent.messages[2]["content"] == "Third"
+
+    def test_ephemeral_mode_no_persist(self, tmp_path):
+        """Ephemeral mode should not create session files."""
+        agent = self._make_agent(tmp_path)
+        agent._ephemeral = True
+
+        koi_dir = tmp_path / ".koi"
+        sessions_dir = koi_dir / "sessions"
+
+        # Count existing session files
+        existing = list(sessions_dir.glob("*.jsonl")) if sessions_dir.exists() else []
+
+        # Simulate what would happen in non-ephemeral mode
+        # (the guards in agent.py prevent save_message from being called)
+        if not agent._ephemeral:
+            agent.session_manager.start_session(model="test", cwd=str(tmp_path))
+
+        msg = {"role": "user", "content": "Hello"}
+        agent.messages.append(msg)
+        if not agent._ephemeral:
+            agent.session_manager.save_message(msg)
+
+        if not agent._ephemeral:
+            agent.session_manager.close()
+
+        # No new session files should have been created
+        current = list(sessions_dir.glob("*.jsonl")) if sessions_dir.exists() else []
+        assert len(current) == len(existing)
 

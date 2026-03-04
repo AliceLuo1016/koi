@@ -654,6 +654,25 @@ def switch():
     is_flag=True,
     help="Enable debug transcript logging to .koi/transcript.jsonl"
 )
+@click.option(
+    "--resume", "-r",
+    "resume_session",
+    default=None,
+    is_flag=False,
+    flag_value="__latest__",
+    help="Resume a session. Without value: resume latest. With value: resume specific session ID or path."
+)
+@click.option(
+    "--new",
+    "force_new",
+    is_flag=True,
+    help="Force a new session (default behavior, explicit flag)"
+)
+@click.option(
+    "--no-session",
+    is_flag=True,
+    help="Ephemeral mode — don't save session to disk"
+)
 def run(
     task: Optional[str],
     non_interactive: bool,
@@ -662,6 +681,9 @@ def run(
     model_override: Optional[str],
     pipe: bool,
     debug: bool,
+    resume_session: Optional[str],
+    force_new: bool,
+    no_session: bool,
 ):
     """Start an interactive agent session or run a specific task."""
     try:
@@ -674,6 +696,33 @@ def run(
             config.debug = True
 
         agent = Agent(config, non_interactive=non_interactive or bool(task) or pipe)
+
+        if no_session:
+            agent._ephemeral = True
+
+        if resume_session:
+            if resume_session == "__latest__":
+                # Resume latest session
+                from .session_manager import SessionManager
+                sm = SessionManager(Path.cwd() / ".koi")
+                latest = sm.get_latest_session()
+                if latest:
+                    agent.resume_from_session(latest)
+                else:
+                    console.print("No previous sessions found.", style="yellow")
+            else:
+                # Resume specific session (path or ID)
+                session_path = Path(resume_session)
+                if not session_path.exists():
+                    # Try finding by ID in sessions dir
+                    sessions_dir = Path.cwd() / ".koi" / "sessions"
+                    matches = list(sessions_dir.glob(f"*{resume_session}*.jsonl"))
+                    if matches:
+                        session_path = matches[0]
+                    else:
+                        console.print(f"Session not found: {resume_session}", style="red")
+                        return
+                agent.resume_from_session(session_path)
 
         if pipe:
             # Persistent subagent pipe mode
