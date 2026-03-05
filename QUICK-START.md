@@ -3,7 +3,7 @@
 ## 1. Get an API Key
 
 Get an API key from NVIDIA Inference Hub:
-- [NVIDIA NIM](https://inference.nvidia.com/key-management)
+- [NVIDIA Inference Hub](https://inference.nvidia.com/key-management)
 
 ## 2. Install
 
