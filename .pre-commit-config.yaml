@@ -4,11 +4,9 @@ repos:
     hooks:
       - id: trailing-whitespace
         exclude_types: [python]
-        exclude: ^tests/.*/fixtures/.*
         args: [--markdown-linebreak-ext=md]
       - id: end-of-file-fixer
         exclude_types: [python]
-        exclude: ^tests/.*/fixtures/.*
       - id: check-symlinks
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.12.7
