@@ -4,7 +4,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from koi.acp_client import ACPResult, ACPSession, KoiACPClient
+acp = pytest.importorskip("acp", reason="agent-client-protocol not installed")
+
+from koi.acp_client import ACPResult, ACPSession, KoiACPClient  # noqa: E402
 
 
 class TestKoiACPClient:
