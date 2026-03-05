@@ -19,56 +19,7 @@ Terminal-based AI agent with persistent memory, tool calling, extensible skills,
 
 ## Quick Start
 
-See **[BEST-PRACTICES.md](BEST-PRACTICES.md)** for a step-by-step getting started guide with practical examples.
-
-### Install
-
-```bash
-cd ~/koi
-pip install .
-```
-
-### Initialize a Project
-
-```bash
-cd your-project
-koi init
-```
-
-### Configure
-
-Edit `.koi/config.json`:
-
-```json
-{
-  "api_base": "https://api.example.com/v1/responses",
-  "api_key": "your-api-key-here",
-  "model": "your-model-name",
-  "max_tokens": 4096,
-  "context_window": 128000,
-  "skills_paths": [".koi/skills"],
-  "temperature": 0.7
-}
-```
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `api_base` | string | — | API endpoint URL (required) |
-| `api_key` | string | — | API key, or set `KOI_API_KEY` env var |
-| `model` | string | `openai/openai/gpt-5.2-codex` | Model identifier |
-| `api_format` | string | auto-detected | `responses`, `chat_completions`, or `anthropic` |
-| `max_tokens` | int | 4096 | Max tokens per response |
-| `context_window` | int | 128000 | Model's context window size |
-| `temperature` | float | model default | Sampling temperature (0–2) |
-| `skills_paths` | array | `[".koi/skills"]` | Directories to search for skills |
-
-### Run
-
-```bash
-koi run
-koi run --thinking high              # Enable extended thinking
-koi run --task "..." --non-interactive  # One-shot for scripts/cron
-```
+See **[BEST-PRACTICES.md](BEST-PRACTICES.md)** for a step-by-step getting started guide, configuration details, and practical examples.
 
 ## Commands
 
@@ -171,12 +122,6 @@ ruff check src/ tests/        # Lint (rules: E, F, W, I, N, UP)
 ```
 
 Uses **uv** as package manager, **hatchling** as build backend. Python 3.9+. Async tests use `pytest-asyncio` with `asyncio_mode = "auto"`.
-
-## Example Workflows
-
-- **Batch-analyze failed jobs** — Scan logs across N failed jobs, summarize common failures with fixes
-- **Automated cluster monitoring** — Cron jobs to watch utilization and auto-submit work
-- **Custom skills** — Walk Koi through your workflow step by step, then package it with skill-creator
 
 ## Troubleshooting
 
