@@ -2,9 +2,7 @@
 
 ## 1. Get an API Key
 
-Get an API key from your LLM provider:
-- [Anthropic](https://console.anthropic.com/) (Claude)
-- [OpenAI](https://platform.openai.com/api-keys) (GPT, O3)
+Get an API key from NVIDIA Inference Hub:
 - [NVIDIA NIM](https://inference.nvidia.com/key-management)
 
 ## 2. Install
@@ -100,7 +98,6 @@ Total: **32 worker nodes** queued across 4 jobs.
 ### Check Jobs & Stats
 
 ![Job list](docs/images/job-list.png)
-![Curation stats](docs/images/curation-stats.png)
 
 ---
 

@@ -21,12 +21,6 @@ Terminal-based AI agent with persistent memory, tool calling, extensible skills,
 
 See **[QUICK-START.md](QUICK-START.md)** for installation, configuration, adding skills, and example workflows.
 
-```bash
-cd ~/koi && pip install .     # Install
-cd your-project && koi init   # Initialize
-koi run                       # Start chatting
-```
-
 ## Documentation
 
 📖 **[docs/wiki/index.md](docs/wiki/index.md)** — Full wiki with architecture, tools, skills, context management, security, and more.
