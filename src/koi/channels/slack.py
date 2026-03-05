@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 from typing import TYPE_CHECKING
+
+from loguru import logger
 
 from .base import Channel, InboundMessage, OutboundMessage
 
 if TYPE_CHECKING:
     from koi.sessions import SessionManager
-
-logger = logging.getLogger(__name__)
 
 
 def _import_slack_sdk():
@@ -66,7 +65,7 @@ class SlackChannel(Channel):
         # Resolve our own bot user ID so we can detect @mentions
         resp = await self._web.auth_test()
         self._bot_user_id = resp["user_id"]
-        logger.info("Slack bot user ID: %s", self._bot_user_id)
+        logger.info("Slack bot user ID: {}", self._bot_user_id)
 
         # Register the event handler and connect
         self._socket.socket_mode_request_listeners.append(self._on_socket_event)
@@ -190,13 +189,13 @@ class SlackChannel(Channel):
                 name=self._ack_reaction,
             )
         except Exception:
-            logger.debug("Could not add ack reaction", exc_info=True)
+            logger.opt(exception=True).debug("Could not add ack reaction")
 
         # Route message to session manager
         try:
             response_text = await self._session_manager.route_message(msg)
         except Exception:
-            logger.exception("Error processing message in session %s", msg.session_key)
+            logger.exception("Error processing message in session {}", msg.session_key)
             response_text = "Sorry, I encountered an error processing your message."
 
         # Remove ack reaction
@@ -207,7 +206,7 @@ class SlackChannel(Channel):
                 name=self._ack_reaction,
             )
         except Exception:
-            logger.debug("Could not remove ack reaction", exc_info=True)
+            logger.opt(exception=True).debug("Could not remove ack reaction")
 
         # Reply in thread
         reply_thread = thread_ts or ts
@@ -220,6 +219,6 @@ class SlackChannel(Channel):
             await self.send_message(outbound)
         except Exception:
             logger.exception(
-                "Failed to send Slack reply for session %s",
+                "Failed to send Slack reply for session {}",
                 msg.session_key,
             )

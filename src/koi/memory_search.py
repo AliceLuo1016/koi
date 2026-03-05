@@ -2,7 +2,6 @@
 
 import hashlib
 import json
-import logging
 import math
 import os
 import re
@@ -14,8 +13,7 @@ from pathlib import Path
 
 import httpx
 import tiktoken
-
-logger = logging.getLogger(__name__)
+from loguru import logger
 
 # Chunking parameters
 TARGET_TOKENS = 400
@@ -265,7 +263,7 @@ class MemorySearchManager:
         stored_model = self._get_meta("model")
         if stored_provider != self.provider or stored_model != self.model:
             logger.info(
-                "Embedding config changed (%s/%s -> %s/%s), reindexing",
+                "Embedding config changed ({}/{} -> {}/{}), reindexing",
                 stored_provider,
                 stored_model,
                 self.provider,
@@ -279,9 +277,7 @@ class MemorySearchManager:
 
     def _get_meta(self, key: str) -> str | None:
         assert self._db is not None
-        row = self._db.execute(
-            "SELECT value FROM meta WHERE key = ?", (key,)
-        ).fetchone()
+        row = self._db.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
         return row[0] if row else None
 
     def _set_meta(self, key: str, value: str) -> None:
@@ -320,22 +316,14 @@ class MemorySearchManager:
         current_rel_paths = {self._rel_path(f) for f in current_files}
 
         # Find indexed file paths
-        indexed_paths = {
-            row[0]
-            for row in self._db.execute(
-                "SELECT DISTINCT file_path FROM chunks"
-            ).fetchall()
-        }
+        indexed_paths = {row[0] for row in self._db.execute("SELECT DISTINCT file_path FROM chunks").fetchall()}
 
         # Delete chunks for removed files
         removed = indexed_paths - current_rel_paths
         for rp in removed:
             # Get chunk IDs before deleting for FTS cleanup
             chunk_ids = [
-                row[0]
-                for row in self._db.execute(
-                    "SELECT id FROM chunks WHERE file_path = ?", (rp,)
-                ).fetchall()
+                row[0] for row in self._db.execute("SELECT id FROM chunks WHERE file_path = ?", (rp,)).fetchall()
             ]
             self._db.execute("DELETE FROM chunks WHERE file_path = ?", (rp,))
             for cid in chunk_ids:
@@ -525,7 +513,7 @@ class MemorySearchManager:
             sorted_data = sorted(data["data"], key=lambda x: x["index"])
             return [item["embedding"] for item in sorted_data]
         except Exception as e:
-            logger.error("Failed to get embeddings: %s", e)
+            logger.error("Failed to get embeddings: {}", e)
             return []
 
     def _prune_cache(self) -> None:
@@ -552,9 +540,7 @@ class MemorySearchManager:
             return []
         query_embedding = embeddings[0]
 
-        rows = self._db.execute(
-            "SELECT file_path, start_line, end_line, chunk_text, embedding FROM chunks"
-        ).fetchall()
+        rows = self._db.execute("SELECT file_path, start_line, end_line, chunk_text, embedding FROM chunks").fetchall()
 
         scored: list[MemorySearchResult] = []
         for file_path, start_line, end_line, chunk_text, emb_json in rows:
@@ -659,9 +645,7 @@ class MemorySearchManager:
 
         # Apply temporal decay
         if self.temporal_decay_enabled:
-            scored = self._apply_temporal_decay(
-                scored, self.temporal_decay_half_life_days
-            )
+            scored = self._apply_temporal_decay(scored, self.temporal_decay_half_life_days)
 
         # Sort by score descending
         scored.sort(key=lambda r: r.score, reverse=True)
@@ -696,9 +680,7 @@ class MemorySearchManager:
         for r in keyword_results:
             key = (r.path, r.start_line, r.end_line)
             if key in merged:
-                merged[key].score = round(
-                    merged[key].score + self.text_weight * r.score, 4
-                )
+                merged[key].score = round(merged[key].score + self.text_weight * r.score, 4)
             else:
                 merged[key] = MemorySearchResult(
                     path=r.path,
@@ -713,9 +695,7 @@ class MemorySearchManager:
         return results
 
     @staticmethod
-    def _apply_temporal_decay(
-        results: list[MemorySearchResult], half_life_days: int = 30
-    ) -> list[MemorySearchResult]:
+    def _apply_temporal_decay(results: list[MemorySearchResult], half_life_days: int = 30) -> list[MemorySearchResult]:
         """Apply exponential decay to scores from dated daily files."""
         today = date.today()
         decay_lambda = math.log(2) / half_life_days
@@ -746,9 +726,7 @@ class MemorySearchManager:
             best_idx = 0
             for i, cand in enumerate(candidates):
                 relevance = cand.score
-                max_sim = max(
-                    _jaccard_similarity(cand.snippet, s.snippet) for s in selected
-                )
+                max_sim = max(_jaccard_similarity(cand.snippet, s.snippet) for s in selected)
                 mmr_score = lambda_param * relevance - (1 - lambda_param) * max_sim
                 if mmr_score > best_score:
                     best_score = mmr_score

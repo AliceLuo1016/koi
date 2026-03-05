@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
+
+from loguru import logger
 
 from .agent import Agent
 from .channels.base import InboundMessage
 from .config import Config
-
-logger = logging.getLogger(__name__)
 
 
 class Session:
@@ -75,7 +74,7 @@ class SessionManager:
             agent = Agent(self.config, non_interactive=True)
             session = Session(session_key, agent)
             self._sessions[session_key] = session
-            logger.info("Created session %s", session_key)
+            logger.info("Created session {}", session_key)
         return self._sessions[session_key]
 
     async def route_message(self, msg: InboundMessage) -> str:
@@ -98,13 +97,11 @@ class SessionManager:
         while True:
             await asyncio.sleep(60)
             now = time.monotonic()
-            expired = [
-                k for k, s in self._sessions.items() if (now - s.last_active) > max_idle
-            ]
+            expired = [k for k, s in self._sessions.items() if (now - s.last_active) > max_idle]
             for key in expired:
                 session = self._sessions.pop(key, None)
                 if session:
-                    logger.info("Evicting idle session %s", key)
+                    logger.info("Evicting idle session {}", key)
                     await self._close_session(session)
 
     async def _close_session(self, session: Session) -> None:
@@ -112,4 +109,4 @@ class SessionManager:
         try:
             await session.agent.llm_client.close()
         except Exception:
-            logger.exception("Error closing session %s", session.key)
+            logger.exception("Error closing session {}", session.key)

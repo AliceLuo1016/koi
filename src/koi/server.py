@@ -2,13 +2,11 @@
 
 from __future__ import annotations
 
-import logging
+from loguru import logger
 
 from .channels.base import Channel
 from .config import Config
 from .sessions import SessionManager
-
-logger = logging.getLogger(__name__)
 
 
 def _import_starlette():
@@ -20,10 +18,7 @@ def _import_starlette():
 
         return Starlette, JSONResponse, Route
     except ImportError:
-        raise ImportError(
-            "Server mode requires the 'server' extra. "
-            "Install with: pip install 'koi[server]'"
-        )
+        raise ImportError("Server mode requires the 'server' extra. Install with: pip install 'koi[server]'")
 
 
 class KoiServer:
@@ -57,9 +52,9 @@ class KoiServer:
         for ch in self.channels:
             try:
                 await ch.start()
-                logger.info("Started channel: %s", type(ch).__name__)
+                logger.info("Started channel: {}", type(ch).__name__)
             except Exception:
-                logger.exception("Failed to start channel: %s", type(ch).__name__)
+                logger.exception("Failed to start channel: {}", type(ch).__name__)
 
     async def _on_shutdown(self) -> None:
         """Gracefully stop channels and session manager."""
@@ -67,7 +62,7 @@ class KoiServer:
             try:
                 await ch.stop()
             except Exception:
-                logger.exception("Error stopping channel: %s", type(ch).__name__)
+                logger.exception("Error stopping channel: {}", type(ch).__name__)
         await self.session_manager.stop()
 
     def run(self, host: str = "0.0.0.0", port: int = 8080) -> None:
@@ -75,7 +70,5 @@ class KoiServer:
         try:
             import uvicorn
         except ImportError:
-            raise ImportError(
-                "Server mode requires uvicorn. Install with: pip install 'koi[server]'"
-            )
+            raise ImportError("Server mode requires uvicorn. Install with: pip install 'koi[server]'")
         uvicorn.run(self.app, host=host, port=port, log_level="info")
