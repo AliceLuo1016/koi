@@ -256,9 +256,7 @@ class TestMemorySearchSync:
                 mgr.sync()
                 count = mgr._db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
                 assert count == 0
-                fts_count = mgr._db.execute(
-                    "SELECT COUNT(*) FROM chunks_fts"
-                ).fetchone()[0]
+                fts_count = mgr._db.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
                 assert fts_count == 0
             mgr.close()
 
@@ -362,9 +360,7 @@ class TestKeywordSearch:
         with TemporaryDirectory() as tmp:
             koi_dir = Path(tmp)
             mem_file = koi_dir / "MEMORY.md"
-            mem_file.write_text(
-                "Python is great for scripting.\n\nRust is fast for systems."
-            )
+            mem_file.write_text("Python is great for scripting.\n\nRust is fast for systems.")
 
             mgr = MemorySearchManager(koi_dir=koi_dir, api_key="")
             mgr.sync()
@@ -384,9 +380,7 @@ class TestHybridSearch:
         with TemporaryDirectory() as tmp:
             koi_dir = Path(tmp)
             mem_file = koi_dir / "MEMORY.md"
-            mem_file.write_text(
-                "The user prefers dark mode.\n\nThe project uses Python 3.12."
-            )
+            mem_file.write_text("The user prefers dark mode.\n\nThe project uses Python 3.12.")
 
             mgr = MemorySearchManager(
                 koi_dir=koi_dir,
@@ -440,9 +434,7 @@ class TestMemorySearch:
         with TemporaryDirectory() as tmp:
             koi_dir = Path(tmp)
             mem_file = koi_dir / "MEMORY.md"
-            mem_file.write_text(
-                "The user prefers dark mode.\n\nThe project uses Python 3.12."
-            )
+            mem_file.write_text("The user prefers dark mode.\n\nThe project uses Python 3.12.")
 
             mgr = MemorySearchManager(koi_dir=koi_dir, api_key="test-key")
 
@@ -613,9 +605,7 @@ class TestMMR:
                 snippet="python project uses fastapi and postgresql",
             ),
         ]
-        selected = MemorySearchManager._apply_mmr(
-            results, max_results=2, lambda_param=0.7
-        )
+        selected = MemorySearchManager._apply_mmr(results, max_results=2, lambda_param=0.7)
         assert len(selected) == 2
         # First result should be the highest scored
         assert selected[0].score == 0.9
@@ -648,9 +638,7 @@ class TestEmbeddingCache:
         """Cache hit should avoid calling the API."""
         with TemporaryDirectory() as tmp:
             koi_dir = Path(tmp)
-            mgr = MemorySearchManager(
-                koi_dir=koi_dir, api_key="test-key", cache_enabled=True
-            )
+            mgr = MemorySearchManager(koi_dir=koi_dir, api_key="test-key", cache_enabled=True)
 
             # Pre-populate cache
             text = "hello world"
@@ -684,9 +672,7 @@ class TestEmbeddingCache:
         """Cache miss should call API and store result in cache."""
         with TemporaryDirectory() as tmp:
             koi_dir = Path(tmp)
-            mgr = MemorySearchManager(
-                koi_dir=koi_dir, api_key="test-key", cache_enabled=True
-            )
+            mgr = MemorySearchManager(koi_dir=koi_dir, api_key="test-key", cache_enabled=True)
 
             text = "hello world"
             text_hash = _sha256(text)
@@ -733,17 +719,12 @@ class TestEmbeddingCache:
             mgr._prune_cache()
             mgr._db.commit()
 
-            count = mgr._db.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[
-                0
-            ]
+            count = mgr._db.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
             assert count == 3
 
             # The oldest entries (hash_0, hash_1) should be gone
             remaining = [
-                row[0]
-                for row in mgr._db.execute(
-                    "SELECT hash FROM embedding_cache ORDER BY updated_at"
-                ).fetchall()
+                row[0] for row in mgr._db.execute("SELECT hash FROM embedding_cache ORDER BY updated_at").fetchall()
             ]
             assert "hash_0" not in remaining
             assert "hash_1" not in remaining
@@ -798,9 +779,7 @@ class TestPreCompactionFlush:
             call_args = mock_llm.chat.call_args
             flush_msgs = call_args[0][0]
             # Should contain the system + user flush messages
-            assert any(
-                "compaction" in str(m.get("content", "")).lower() for m in flush_msgs
-            )
+            assert any("compaction" in str(m.get("content", "")).lower() for m in flush_msgs)
 
     @pytest.mark.asyncio
     async def test_flush_executes_tool_calls(self):
@@ -820,9 +799,7 @@ class TestPreCompactionFlush:
                             {
                                 "function": {
                                     "name": "update_memory",
-                                    "arguments": (
-                                        '{"content": "test note", "target": "daily"}'
-                                    ),
+                                    "arguments": ('{"content": "test note", "target": "daily"}'),
                                 }
                             }
                         ],
@@ -852,9 +829,7 @@ class TestPreCompactionFlush:
 
             await agent._pre_compaction_memory_flush(tools=[])
 
-            mock_executor.execute.assert_called_once_with(
-                "update_memory", {"content": "test note", "target": "daily"}
-            )
+            mock_executor.execute.assert_called_once_with("update_memory", {"content": "test note", "target": "daily"})
 
 
 # ── Tool integration tests ────────────────────────────
@@ -928,9 +903,7 @@ class TestMemoryGetTool:
 
             executor = ToolExecutor(skills_manager=MagicMock())
             with patch("koi.tools.Path.cwd", return_value=Path(tmp)):
-                result = await executor._memory_get(
-                    path="MEMORY.md", from_line=2, num_lines=2
-                )
+                result = await executor._memory_get(path="MEMORY.md", from_line=2, num_lines=2)
             assert result["success"]
             assert "Line 2" in result["text"]
             assert "Line 3" in result["text"]
@@ -998,9 +971,7 @@ class TestUpdateMemoryTool:
             executor = ToolExecutor(skills_manager=MagicMock())
             memory = Memory(mem_path)
             with patch("koi.memory.Memory", return_value=memory):
-                result = await executor._update_memory(
-                    content="daily note", target="daily"
-                )
+                result = await executor._update_memory(content="daily note", target="daily")
             assert result["success"]
             assert "daily log" in result["message"]
 
@@ -1016,9 +987,7 @@ class TestUpdateMemoryTool:
             executor = ToolExecutor(skills_manager=MagicMock())
             memory = Memory(mem_path)
             with patch("koi.memory.Memory", return_value=memory):
-                result = await executor._update_memory(
-                    content="important fact", target="long_term"
-                )
+                result = await executor._update_memory(content="important fact", target="long_term")
             assert result["success"]
             assert "MEMORY.md" in result["message"]
             assert mem_path.exists()
@@ -1185,9 +1154,7 @@ class TestToolDefinitions:
         from koi.tools import get_tool_definitions
 
         tools = get_tool_definitions()
-        update_memory = next(
-            t for t in tools if t["function"]["name"] == "update_memory"
-        )
+        update_memory = next(t for t in tools if t["function"]["name"] == "update_memory")
         props = update_memory["function"]["parameters"]["properties"]
         assert "target" in props
         assert "daily" in props["target"]["enum"]

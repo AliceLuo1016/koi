@@ -202,9 +202,7 @@ class TestResumeSession:
         assert data["messages"][1]["content"] == "Hi!"
 
     def test_resume_nonexistent_raises(self, koi_dir):
-        sm = SessionManager(
-            koi_dir, session_path=koi_dir / "sessions" / "nonexistent.jsonl"
-        )
+        sm = SessionManager(koi_dir, session_path=koi_dir / "sessions" / "nonexistent.jsonl")
         with pytest.raises(FileNotFoundError):
             sm.resume_session()
 
@@ -255,14 +253,10 @@ class TestForkSession:
 
         non_header = [e for e in entries if e.get("type") != "session"]
         branch_a_entry = [
-            e
-            for e in non_header
-            if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-a"
+            e for e in non_header if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-a"
         ][0]
         branch_b_entry = [
-            e
-            for e in non_header
-            if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-b"
+            e for e in non_header if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-b"
         ][0]
 
         assert branch_a_entry["parentId"] == fork_point

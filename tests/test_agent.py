@@ -229,9 +229,7 @@ async def test_context_overflow_auto_compact_retry():
                 }
             ]
         }
-        agent.llm_client.chat = AsyncMock(
-            side_effect=[KoiContextOverflowError("too many tokens"), normal_response]
-        )
+        agent.llm_client.chat = AsyncMock(side_effect=[KoiContextOverflowError("too many tokens"), normal_response])
 
         # Compactor returns a shorter message list
         compacted = [{"role": "user", "content": "compacted"}]

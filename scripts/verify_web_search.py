@@ -61,9 +61,7 @@ def build_request(preset: dict[str, Any], key: str) -> dict[str, Any]:
             "input": [
                 {
                     "role": "user",
-                    "content": (
-                        "Search the web for today's top tech headline and cite sources."
-                    ),
+                    "content": ("Search the web for today's top tech headline and cite sources."),
                 }
             ],
             "tools": [{"type": "web_search"}],
@@ -85,11 +83,7 @@ def build_request(preset: dict[str, Any], key: str) -> dict[str, Any]:
             "messages": [
                 {
                     "role": "user",
-                    "content": (
-                        "Try to search the web for"
-                        " today's top tech headline"
-                        " and cite sources."
-                    ),
+                    "content": ("Try to search the web for today's top tech headline and cite sources."),
                 }
             ],
             "max_tokens": 200,
@@ -109,9 +103,7 @@ def build_request(preset: dict[str, Any], key: str) -> dict[str, Any]:
             "messages": [
                 {
                     "role": "user",
-                    "content": (
-                        "Search the web for today's top tech headline and cite sources."
-                    ),
+                    "content": ("Search the web for today's top tech headline and cite sources."),
                 }
             ],
             "tools": [
@@ -131,9 +123,7 @@ def build_request(preset: dict[str, Any], key: str) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--preset", required=True, choices=["1", "2", "3"], help="Preset number"
-    )
+    parser.add_argument("--preset", required=True, choices=["1", "2", "3"], help="Preset number")
     parser.add_argument("--key", default="", help="API key for this preset")
     parser.add_argument(
         "--tool-type",
@@ -177,25 +167,15 @@ def main() -> int:
             # Responses API: tool calls appear in output items
             output = data.get("output", [])
             tool_items = [
-                item
-                for item in output
-                if item.get("type") in ("web_search_call", "tool_call", "function_call")
+                item for item in output if item.get("type") in ("web_search_call", "tool_call", "function_call")
             ]
             used_tool = bool(tool_items)
             print("Tool usage detected." if used_tool else "No tool usage detected.")
             if tool_items:
                 print("--- Tool call details ---")
                 for item in tool_items:
-                    name = (
-                        item.get("name")
-                        or item.get("tool")
-                        or item.get("function", {}).get("name")
-                    )
-                    args = (
-                        item.get("arguments")
-                        or item.get("parameters")
-                        or item.get("function", {}).get("arguments")
-                    )
+                    name = item.get("name") or item.get("tool") or item.get("function", {}).get("name")
+                    args = item.get("arguments") or item.get("parameters") or item.get("function", {}).get("arguments")
                     if isinstance(args, str) and len(args) > 500:
                         args = args[:500] + "..."
                     print(f"type={item.get('type')} name={name}")
@@ -206,16 +186,12 @@ def main() -> int:
                 print("--- Output item types ---")
                 print(", ".join(item.get("type", "?") for item in output))
             has_result = any(
-                item.get("type")
-                in ("web_search_result", "tool_result", "function_call_output")
-                for item in output
+                item.get("type") in ("web_search_result", "tool_result", "function_call_output") for item in output
             )
             if has_result:
                 conclusion = "PASS: web search executed (results present)."
             elif used_tool:
-                conclusion = (
-                    "FAIL: model requested web search, but no results were returned."
-                )
+                conclusion = "FAIL: model requested web search, but no results were returned."
             else:
                 conclusion = "FAIL: no web search tool call detected."
         elif preset["api_format"] == "anthropic":
@@ -232,18 +208,13 @@ def main() -> int:
                         print(f"name={name} input={tool_input}")
             has_result = any(
                 block.get("type") == "web_search_tool_result"
-                or (
-                    block.get("type") == "server_tool_use"
-                    and block.get("name") == "web_search"
-                )
+                or (block.get("type") == "server_tool_use" and block.get("name") == "web_search")
                 for block in content
             )
             if has_result:
                 conclusion = "PASS: web search executed (results/citations present)."
             elif used_tool:
-                conclusion = (
-                    "FAIL: model requested web search, but no results were returned."
-                )
+                conclusion = "FAIL: model requested web search, but no results were returned."
             else:
                 conclusion = "FAIL: no web search tool call detected."
         else:
@@ -253,9 +224,7 @@ def main() -> int:
                 " support built-in web search unless"
                 " using search-enabled models."
             )
-            conclusion = (
-                "FAIL: built-in web search not supported on this endpoint/model."
-            )
+            conclusion = "FAIL: built-in web search not supported on this endpoint/model."
 
         # Print a short snippet
         text = None

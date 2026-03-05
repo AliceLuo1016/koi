@@ -48,9 +48,7 @@ async def test_spawn_creates_process():
     mock_proc = _mock_process()
 
     with TemporaryDirectory() as tmpdir:
-        with patch(
-            "koi.subagent.asyncio.create_subprocess_exec", return_value=mock_proc
-        ):
+        with patch("koi.subagent.asyncio.create_subprocess_exec", return_value=mock_proc):
             result = await mgr.spawn(task="say hello", cwd=tmpdir)
 
         assert result["status"] == "accepted"
@@ -68,9 +66,7 @@ async def test_spawn_returns_run_id_and_label():
     mock_proc = _mock_process()
 
     with TemporaryDirectory() as tmpdir:
-        with patch(
-            "koi.subagent.asyncio.create_subprocess_exec", return_value=mock_proc
-        ):
+        with patch("koi.subagent.asyncio.create_subprocess_exec", return_value=mock_proc):
             result = await mgr.spawn(task="do work", label="my-job", cwd=tmpdir)
 
         run_id = result["run_id"]
@@ -110,9 +106,7 @@ async def test_spawn_depth_env_propagated():
         return mock_proc
 
     with TemporaryDirectory() as tmpdir:
-        with patch(
-            "koi.subagent.asyncio.create_subprocess_exec", side_effect=capture_exec
-        ):
+        with patch("koi.subagent.asyncio.create_subprocess_exec", side_effect=capture_exec):
             await mgr.spawn(task="child task", cwd=tmpdir)
 
         assert captured_kwargs["env"]["KOI_SPAWN_DEPTH"] == "2"
@@ -166,9 +160,7 @@ async def test_spawn_allows_after_completed():
 
     mock_proc = _mock_process()
     with TemporaryDirectory() as tmpdir:
-        with patch(
-            "koi.subagent.asyncio.create_subprocess_exec", return_value=mock_proc
-        ):
+        with patch("koi.subagent.asyncio.create_subprocess_exec", return_value=mock_proc):
             result = await mgr.spawn(task="should work", cwd=tmpdir)
 
         assert result["status"] == "accepted"
@@ -291,9 +283,7 @@ async def test_wait_for_completion_reads_result_file():
 
     with TemporaryDirectory() as tmpdir:
         result_file = Path(tmpdir) / "result.json"
-        result_file.write_text(
-            json.dumps({"summary": "task done", "response": "full output"})
-        )
+        result_file.write_text(json.dumps({"summary": "task done", "response": "full output"}))
 
         mock_proc = _mock_process(returncode=0, stdout=b"stdout text", stderr=b"")
 
@@ -459,9 +449,7 @@ def test_tool_definitions_include_subagent_tools():
 async def test_tool_executor_spawn_subagent_calls_manager():
     """spawn_subagent tool delegates to SubagentManager.spawn."""
     mock_mgr = AsyncMock()
-    mock_mgr.spawn = AsyncMock(
-        return_value={"status": "accepted", "run_id": "abc123", "note": "started"}
-    )
+    mock_mgr.spawn = AsyncMock(return_value={"status": "accepted", "run_id": "abc123", "note": "started"})
 
     executor = ToolExecutor(Mock(), subagent_manager=mock_mgr)
 
@@ -489,9 +477,7 @@ async def test_tool_executor_spawn_subagent_calls_manager():
 async def test_tool_executor_spawn_subagent_with_options():
     """spawn_subagent passes optional parameters through."""
     mock_mgr = AsyncMock()
-    mock_mgr.spawn = AsyncMock(
-        return_value={"status": "accepted", "run_id": "xyz", "note": "ok"}
-    )
+    mock_mgr.spawn = AsyncMock(return_value={"status": "accepted", "run_id": "xyz", "note": "ok"})
 
     executor = ToolExecutor(Mock(), subagent_manager=mock_mgr)
 
@@ -527,9 +513,7 @@ async def test_tool_executor_spawn_subagent_with_options():
 async def test_tool_executor_spawn_subagent_error_propagated():
     """spawn_subagent returns error when manager returns error status."""
     mock_mgr = AsyncMock()
-    mock_mgr.spawn = AsyncMock(
-        return_value={"status": "error", "error": "Max children reached (5)"}
-    )
+    mock_mgr.spawn = AsyncMock(return_value={"status": "error", "error": "Max children reached (5)"})
 
     executor = ToolExecutor(Mock(), subagent_manager=mock_mgr)
 
@@ -700,9 +684,7 @@ async def test_run_task_writes_result_file():
         ]
         mock_agent.run_task = AsyncMock()
 
-        await _run_task(
-            mock_agent, "hello", non_interactive=True, result_file=str(result_path)
-        )
+        await _run_task(mock_agent, "hello", non_interactive=True, result_file=str(result_path))
 
         assert result_path.exists()
         data = json.loads(result_path.read_text())
@@ -740,9 +722,7 @@ async def test_spawn_builds_correct_command():
         return _mock_process()
 
     with TemporaryDirectory() as tmpdir:
-        with patch(
-            "koi.subagent.asyncio.create_subprocess_exec", side_effect=capture_exec
-        ):
+        with patch("koi.subagent.asyncio.create_subprocess_exec", side_effect=capture_exec):
             await mgr.spawn(
                 task="do stuff",
                 model="gpt-4",
@@ -775,9 +755,7 @@ async def test_spawn_minimal_command():
         return _mock_process()
 
     with TemporaryDirectory() as tmpdir:
-        with patch(
-            "koi.subagent.asyncio.create_subprocess_exec", side_effect=capture_exec
-        ):
+        with patch("koi.subagent.asyncio.create_subprocess_exec", side_effect=capture_exec):
             await mgr.spawn(task="simple task", cwd=tmpdir)
 
         cmd = captured_args
@@ -931,13 +909,9 @@ class TestSendToSubagent:
         mock_proc.stdin = MagicMock()
         mock_proc.stdin.write = MagicMock()
         mock_proc.stdin.drain = AsyncMock()
-        response_json = json.dumps(
-            {"type": "response", "content": "Done!", "usage": {}}
-        )
+        response_json = json.dumps({"type": "response", "content": "Done!", "usage": {}})
         mock_proc.stdout = MagicMock()
-        mock_proc.stdout.readline = AsyncMock(
-            return_value=(response_json + "\n").encode()
-        )
+        mock_proc.stdout.readline = AsyncMock(return_value=(response_json + "\n").encode())
 
         run = SubagentRun(
             id="abc",
@@ -1410,9 +1384,7 @@ class TestSendACPSession:
         mgr = SubagentManager(config)
         mock_acp = AsyncMock()
         mock_acp.send = AsyncMock(
-            return_value=ACPResult(
-                content="Done!", stop_reason="end_turn", tool_calls=[], thoughts=""
-            )
+            return_value=ACPResult(content="Done!", stop_reason="end_turn", tool_calls=[], thoughts="")
         )
         run = SubagentRun(
             id="abc",
@@ -1435,9 +1407,7 @@ class TestSendACPSession:
         config = MagicMock()
         mgr = SubagentManager(config)
         mock_acp = AsyncMock()
-        mock_acp.send = AsyncMock(
-            return_value=ACPResult(content="", stop_reason="timeout")
-        )
+        mock_acp.send = AsyncMock(return_value=ACPResult(content="", stop_reason="timeout"))
         mock_acp.close = AsyncMock()
         mock_proc = MagicMock()
         mock_proc.returncode = None

@@ -403,10 +403,7 @@ async def test_streaming_anthropic_applies_cache_control():
             pass
 
         async def aiter_lines(self):
-            yield (
-                'data: {"type": "content_block_delta", '
-                '"delta": {"type": "text_delta", "text": "hi"}}'
-            )
+            yield ('data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hi"}}')
             yield 'data: {"type": "message_stop"}'
 
     def capture_stream(*a, **kw):

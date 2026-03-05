@@ -81,10 +81,7 @@ class TestEstimateContextChars:
         user_chars = len("hi")
         assistant_chars = len("hello")
         tool_chars = len("data") * CHARS_PER_TOKEN // TOOL_RESULT_CHARS_PER_TOKEN
-        assert (
-            estimate_context_chars(messages)
-            == user_chars + assistant_chars + tool_chars
-        )
+        assert estimate_context_chars(messages) == user_chars + assistant_chars + tool_chars
 
     def test_empty_list(self):
         assert estimate_context_chars([]) == 0
@@ -219,9 +216,7 @@ class TestEnforceContextBudget:
         # context_window = 1000 tokens
         # max_single_tool_chars = 1000 * 2 * 0.5 = 1000 chars
         context_window = 1000
-        max_single = int(
-            context_window * TOOL_RESULT_CHARS_PER_TOKEN * SINGLE_TOOL_RESULT_SHARE
-        )
+        max_single = int(context_window * TOOL_RESULT_CHARS_PER_TOKEN * SINGLE_TOOL_RESULT_SHARE)
         oversized_content = "x" * (max_single * 3)
         messages = [
             {"role": "user", "content": "go"},
@@ -294,11 +289,7 @@ class TestEnforceContextBudget:
             )
         result = enforce_context_budget(messages, context_window)
         # At least some old tool results should be compacted
-        compacted_count = sum(
-            1
-            for m in result
-            if m.get("role") == "tool" and m["content"] == COMPACTION_PLACEHOLDER
-        )
+        compacted_count = sum(1 for m in result if m.get("role") == "tool" and m["content"] == COMPACTION_PLACEHOLDER)
         assert compacted_count > 0
         # Total should now be under budget
         assert estimate_context_chars(result) <= budget_chars

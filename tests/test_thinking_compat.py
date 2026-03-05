@@ -311,9 +311,7 @@ class TestThinkingFallback:
                 mock_resp.status_code = 400
                 mock_resp.text = "thinking is not supported for this model"
                 mock_resp.headers = {}
-                raise httpx.HTTPStatusError(
-                    "400", request=MagicMock(), response=mock_resp
-                )
+                raise httpx.HTTPStatusError("400", request=MagicMock(), response=mock_resp)
             # Second call: success
             resp = MagicMock()
             resp.raise_for_status = lambda: None
@@ -395,21 +393,15 @@ class TestThinkingFallback:
 
 class TestEffectiveThinkingLevel:
     def test_returns_off_when_thinking_off(self):
-        config = Config(
-            model="claude-sonnet-4", api_format="anthropic", thinking_level="off"
-        )
+        config = Config(model="claude-sonnet-4", api_format="anthropic", thinking_level="off")
         assert config.effective_thinking_level() == "off"
 
     def test_returns_level_for_supported_model(self):
-        config = Config(
-            model="claude-sonnet-4", api_format="anthropic", thinking_level="high"
-        )
+        config = Config(model="claude-sonnet-4", api_format="anthropic", thinking_level="high")
         assert config.effective_thinking_level() == "high"
 
     def test_returns_off_for_unsupported_model(self):
-        config = Config(
-            model="claude-3-haiku", api_format="anthropic", thinking_level="high"
-        )
+        config = Config(model="claude-3-haiku", api_format="anthropic", thinking_level="high")
         assert config.effective_thinking_level() == "off"
 
     def test_returns_off_for_unknown_model(self):
@@ -421,7 +413,5 @@ class TestEffectiveThinkingLevel:
         assert config.effective_thinking_level() == "off"
 
     def test_returns_level_for_o3(self):
-        config = Config(
-            model="o3-mini", api_format="responses", thinking_level="medium"
-        )
+        config = Config(model="o3-mini", api_format="responses", thinking_level="medium")
         assert config.effective_thinking_level() == "medium"

@@ -157,9 +157,7 @@ async def test_tool_executor_read_file_with_offset_limit():
         tool_call = {
             "function": {
                 "name": "read_file",
-                "arguments": json.dumps(
-                    {"path": str(test_file), "offset": 2, "limit": 2}
-                ),
+                "arguments": json.dumps({"path": str(test_file), "offset": 2, "limit": 2}),
             }
         }
 
@@ -182,9 +180,7 @@ async def test_tool_executor_write_file():
         tool_call = {
             "function": {
                 "name": "write_file",
-                "arguments": json.dumps(
-                    {"path": str(test_file), "content": test_content}
-                ),
+                "arguments": json.dumps({"path": str(test_file), "content": test_content}),
             }
         }
 
@@ -278,9 +274,7 @@ async def test_tool_executor_exec_command_safe():
 async def test_sandbox_blocks_dangerous_commands():
     """Test that sandbox blocks commands matching blocked_patterns."""
     with TemporaryDirectory() as temp_dir:
-        sandbox = _make_sandbox(
-            temp_dir, blocked_patterns=[r"rm\s+-rf\s+/", r"DROP\s+TABLE"]
-        )
+        sandbox = _make_sandbox(temp_dir, blocked_patterns=[r"rm\s+-rf\s+/", r"DROP\s+TABLE"])
 
         allowed, reason, _ = sandbox.check_command("rm -rf /")
         assert not allowed
@@ -385,9 +379,7 @@ async def test_tool_executor_update_memory():
             tool_call = {
                 "function": {
                     "name": "update_memory",
-                    "arguments": json.dumps(
-                        {"content": "remember this", "target": "long_term"}
-                    ),
+                    "arguments": json.dumps({"content": "remember this", "target": "long_term"}),
                 }
             }
 
@@ -508,9 +500,7 @@ async def test_tool_executor_resolve_alert():
             alerts_dir = Path(temp_dir) / ".koi" / "alerts"
             alerts_dir.mkdir(parents=True)
             alert_file = alerts_dir / "test_alert.md"
-            alert_file.write_text(
-                "# Test\n- **Status:** pending\n- **Severity:** high\n"
-            )
+            alert_file.write_text("# Test\n- **Status:** pending\n- **Severity:** high\n")
 
             executor = ToolExecutor(Mock())
 
@@ -546,9 +536,7 @@ async def test_tool_executor_resolve_alert_not_found():
             tool_call = {
                 "function": {
                     "name": "resolve_alert",
-                    "arguments": json.dumps(
-                        {"alert_file": "missing.md", "resolution": "dismissed"}
-                    ),
+                    "arguments": json.dumps({"alert_file": "missing.md", "resolution": "dismissed"}),
                 }
             }
             result = await executor.execute_tool(tool_call)
@@ -575,9 +563,7 @@ async def test_tool_executor_resolve_alert_returns_fix_command():
             tool_call = {
                 "function": {
                     "name": "resolve_alert",
-                    "arguments": json.dumps(
-                        {"alert_file": "fix_alert.md", "resolution": "approved"}
-                    ),
+                    "arguments": json.dumps({"alert_file": "fix_alert.md", "resolution": "approved"}),
                 }
             }
             result = await executor.execute_tool(tool_call)
@@ -910,9 +896,7 @@ async def test_tool_executor_add_cron_job_success():
         tool_call = {
             "function": {
                 "name": "add_cron_job",
-                "arguments": json.dumps(
-                    {"schedule": "0 * * * *", "task": "run checks"}
-                ),
+                "arguments": json.dumps({"schedule": "0 * * * *", "task": "run checks"}),
             }
         }
         result = await executor.execute_tool(tool_call)
@@ -945,9 +929,7 @@ async def test_tool_executor_list_cron_jobs_success():
     executor = ToolExecutor(Mock())
 
     with patch("koi.cron.CronManager") as mock_cron:
-        mock_cron.return_value.list_jobs.return_value = [
-            {"id": "j1", "schedule": "0 * * * *", "task": "do stuff"}
-        ]
+        mock_cron.return_value.list_jobs.return_value = [{"id": "j1", "schedule": "0 * * * *", "task": "do stuff"}]
         tool_call = {
             "function": {
                 "name": "list_cron_jobs",

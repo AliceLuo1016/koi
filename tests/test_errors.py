@@ -89,23 +89,18 @@ class TestClassifyHttpError:
         assert err.retryable
 
     def test_context_overflow_anthropic(self):
-        err = classify_http_error(
-            400, "prompt is too long: 213462 tokens > 200000 maximum"
-        )
+        err = classify_http_error(400, "prompt is too long: 213462 tokens > 200000 maximum")
         assert isinstance(err, KoiContextOverflowError)
         assert not err.retryable
 
     def test_context_overflow_openai(self):
-        err = classify_http_error(
-            400, "Your input exceeds the context window of this model"
-        )
+        err = classify_http_error(400, "Your input exceeds the context window of this model")
         assert isinstance(err, KoiContextOverflowError)
 
     def test_context_overflow_google(self):
         err = classify_http_error(
             400,
-            "The input token count (1196265) exceeds the maximum number"
-            " of tokens allowed (1048575)",
+            "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)",
         )
         assert isinstance(err, KoiContextOverflowError)
 
@@ -177,8 +172,7 @@ class TestContextOverflowPatterns:
             "prompt is too long: 213462 tokens > 200000 maximum",
             "input is too long for requested model",
             "Your input exceeds the context window of this model",
-            "The input token count (1196265) exceeds the maximum"
-            " number of tokens allowed (1048575)",
+            "The input token count (1196265) exceeds the maximum number of tokens allowed (1048575)",
             "This model's maximum prompt length is 131072",
             "Please reduce the length of the messages or completion",
             "This endpoint's maximum context length is 8192 tokens",

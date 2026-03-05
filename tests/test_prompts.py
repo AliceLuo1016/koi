@@ -169,12 +169,8 @@ def test_build_alerts_section_with_pending():
         try:
             alerts_dir = Path(td) / ".koi" / "alerts"
             alerts_dir.mkdir(parents=True)
-            (alerts_dir / "alert1.md").write_text(
-                "# Disk Full\n- **Status:** pending\n"
-            )
-            (alerts_dir / "alert2.md").write_text(
-                "# CPU High\n- **Status:** dismissed\n"
-            )
+            (alerts_dir / "alert1.md").write_text("# Disk Full\n- **Status:** pending\n")
+            (alerts_dir / "alert2.md").write_text("# CPU High\n- **Status:** dismissed\n")
             section = _build_alerts_section()
             assert "pending" in section.lower() or "alert" in section.lower()
             assert "Disk Full" in section

@@ -24,16 +24,12 @@ class TestKoiACPClient:
         client = KoiACPClient(auto_approve=True)
         option = MagicMock()
         option.id = "opt1"
-        resp = await client.request_permission(
-            options=[option], session_id="s1", tool_call=MagicMock()
-        )
+        resp = await client.request_permission(options=[option], session_id="s1", tool_call=MagicMock())
         assert resp.outcome.outcome == "selected"
 
     async def test_request_permission_deny(self):
         client = KoiACPClient(auto_approve=False)
-        resp = await client.request_permission(
-            options=[MagicMock()], session_id="s1", tool_call=MagicMock()
-        )
+        resp = await client.request_permission(options=[MagicMock()], session_id="s1", tool_call=MagicMock())
         assert resp.outcome.outcome == "cancelled"
 
     async def test_session_update_text(self):
@@ -223,7 +219,5 @@ class TestACPSessionClose:
 class TestRequestPermissionEmpty:
     async def test_auto_approve_empty_options(self):
         client = KoiACPClient(auto_approve=True)
-        resp = await client.request_permission(
-            options=[], session_id="s1", tool_call=MagicMock()
-        )
+        resp = await client.request_permission(options=[], session_id="s1", tool_call=MagicMock())
         assert resp.outcome.outcome == "cancelled"

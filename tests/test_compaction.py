@@ -79,9 +79,7 @@ async def test_compact_messages_creates_summary():
 
     # Mock the LLM to return a summary
     compactor.llm_client.chat = AsyncMock(
-        return_value={
-            "choices": [{"message": {"content": "Summary of previous conversation."}}]
-        }
+        return_value={"choices": [{"message": {"content": "Summary of previous conversation."}}]}
     )
 
     messages = [
@@ -173,9 +171,7 @@ async def test_compact_messages_produces_summary():
     compactor = _make_compactor(context_window=128000)
 
     compactor.llm_client.chat = AsyncMock(
-        return_value={
-            "choices": [{"message": {"content": "Discussed file operations."}}]
-        }
+        return_value={"choices": [{"message": {"content": "Discussed file operations."}}]}
     )
 
     messages = [

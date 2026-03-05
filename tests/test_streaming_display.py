@@ -27,9 +27,7 @@ class _MockStreamResponse:
             mock_resp = MagicMock()
             mock_resp.status_code = self.status_code
             mock_resp.text = f"HTTP {self.status_code}"
-            raise httpx.HTTPStatusError(
-                f"{self.status_code}", request=mock_req, response=mock_resp
-            )
+            raise httpx.HTTPStatusError(f"{self.status_code}", request=mock_req, response=mock_resp)
 
     async def aiter_lines(self):
         for line in self._lines:
@@ -96,9 +94,7 @@ async def test_responses_stream_chat_yields_text_events(responses_client):
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in responses_client.stream_chat(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in responses_client.stream_chat([{"role": "user", "content": "hi"}]):
         events.append(event)
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
@@ -115,19 +111,14 @@ async def test_responses_stream_chat_yields_tool_call_events(responses_client):
             'data: {"type":"response.output_item.added",'
             '"item":{"type":"function_call","call_id":"c1","name":"read_file"}}'
         ),
-        (
-            'data: {"type":"response.function_call_arguments.delta",'
-            '"call_id":"c1","delta":"{\\"path\\": \\"/tmp/x\\"}"}'
-        ),
+        ('data: {"type":"response.function_call_arguments.delta","call_id":"c1","delta":"{\\"path\\": \\"/tmp/x\\"}"}'),
         "data: [DONE]",
     ]
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in responses_client.stream_chat(
-        [{"role": "user", "content": "read /tmp/x"}]
-    ):
+    async for event in responses_client.stream_chat([{"role": "user", "content": "read /tmp/x"}]):
         events.append(event)
 
     # Should have toolcall_start and toolcall_delta events
@@ -155,18 +146,13 @@ async def test_responses_stream_chat_uses_completed_event(responses_client):
     }
     lines = [
         'data: {"type":"response.output_text.delta","delta":"Done!"}',
-        (
-            f'data: {{"type":"response.completed",'
-            f'"response":{json.dumps(completed_response)}}}'
-        ),
+        (f'data: {{"type":"response.completed","response":{json.dumps(completed_response)}}}'),
     ]
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in responses_client.stream_chat(
-        [{"role": "user", "content": "do it"}]
-    ):
+    async for event in responses_client.stream_chat([{"role": "user", "content": "do it"}]):
         events.append(event)
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
@@ -208,23 +194,15 @@ async def test_cc_stream_chat_yields_tool_call_events(cc_client):
             '[{"index":0,"id":"tc1","function":'
             '{"name":"run_command","arguments":""}}]}}]}'
         ),
-        (
-            'data: {"choices":[{"delta":{"tool_calls":'
-            '[{"index":0,"function":{"arguments":"{\\"cmd\\":"}}]}}]}'
-        ),
-        (
-            'data: {"choices":[{"delta":{"tool_calls":'
-            '[{"index":0,"function":{"arguments":" \\"ls\\"}"}}]}}]}'
-        ),
+        ('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"cmd\\":"}}]}}]}'),
+        ('data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":" \\"ls\\"}"}}]}}]}'),
         "data: [DONE]",
     ]
 
     cc_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in cc_client.stream_chat(
-        [{"role": "user", "content": "list files"}]
-    ):
+    async for event in cc_client.stream_chat([{"role": "user", "content": "list files"}]):
         events.append(event)
 
     types = [e.type for e in events]
@@ -244,14 +222,8 @@ async def test_cc_stream_chat_yields_tool_call_events(cc_client):
 async def test_anthropic_stream_chat_yields_text_events(anthropic_client):
     """Anthropic stream_chat yields StreamEvent objects."""
     lines = [
-        (
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"text","text":""}}'
-        ),
-        (
-            'data: {"type":"content_block_delta",'
-            '"delta":{"type":"text_delta","text":"Hey"}}'
-        ),
+        ('data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'),
+        ('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hey"}}'),
         'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"!"}}',
         'data: {"type":"message_stop"}',
     ]
@@ -259,9 +231,7 @@ async def test_anthropic_stream_chat_yields_text_events(anthropic_client):
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client.stream_chat(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in anthropic_client.stream_chat([{"role": "user", "content": "hi"}]):
         events.append(event)
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
@@ -295,9 +265,7 @@ async def test_anthropic_stream_chat_yields_tool_call_events(anthropic_client):
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client.stream_chat(
-        [{"role": "user", "content": "read /x"}]
-    ):
+    async for event in anthropic_client.stream_chat([{"role": "user", "content": "read /x"}]):
         events.append(event)
 
     types = [e.type for e in events]
@@ -313,32 +281,17 @@ async def test_anthropic_stream_chat_yields_tool_call_events(anthropic_client):
 async def test_anthropic_stream_chat_skips_thinking(anthropic_client):
     """Thinking events are yielded as thinking_delta, text as text_delta."""
     lines = [
-        (
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"thinking","thinking":""}}'
-        ),
-        (
-            'data: {"type":"content_block_delta",'
-            '"delta":{"type":"thinking_delta",'
-            '"thinking":"internal reasoning"}}'
-        ),
-        (
-            'data: {"type":"content_block_start","index":1,'
-            '"content_block":{"type":"text","text":""}}'
-        ),
-        (
-            'data: {"type":"content_block_delta",'
-            '"delta":{"type":"text_delta","text":"Answer"}}'
-        ),
+        ('data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}'),
+        ('data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"internal reasoning"}}'),
+        ('data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}'),
+        ('data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Answer"}}'),
         'data: {"type":"message_stop"}',
     ]
 
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client.stream_chat(
-        [{"role": "user", "content": "think about this"}]
-    ):
+    async for event in anthropic_client.stream_chat([{"role": "user", "content": "think about this"}]):
         events.append(event)
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
@@ -402,18 +355,9 @@ async def test_stream_response_strips_reasoning_tags():
 async def test_anthropic_stream_events_text(anthropic_client):
     """_stream_anthropic_events yields text_start, text_delta, text_end, done."""
     lines = [
-        (
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"text","text":""}}'
-        ),
-        (
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":"Hello"}}'
-        ),
-        (
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":" world"}}'
-        ),
+        ('data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'),
+        ('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}'),
+        ('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}'),
         'data: {"type":"content_block_stop","index":0}',
         'data: {"type":"message_stop"}',
     ]
@@ -421,9 +365,7 @@ async def test_anthropic_stream_events_text(anthropic_client):
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client._stream_anthropic_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in anthropic_client._stream_anthropic_events([{"role": "user", "content": "hi"}]):
         events.append(event)
 
     types = [e.type for e in events]
@@ -473,9 +415,7 @@ async def test_anthropic_stream_events_tool_call(anthropic_client):
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client._stream_anthropic_events(
-        [{"role": "user", "content": "read /x"}]
-    ):
+    async for event in anthropic_client._stream_anthropic_events([{"role": "user", "content": "read /x"}]):
         events.append(event)
 
     types = [e.type for e in events]
@@ -507,24 +447,15 @@ async def test_anthropic_stream_events_thinking_skipped_in_stream_chat(
 ):
     """stream_chat yields all events including thinking; consumer filters."""
     lines = [
-        (
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"thinking","thinking":""}}'
-        ),
+        ('data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}'),
         (
             'data: {"type":"content_block_delta","index":0,'
             '"delta":{"type":"thinking_delta",'
             '"thinking":"internal reasoning"}}'
         ),
         'data: {"type":"content_block_stop","index":0}',
-        (
-            'data: {"type":"content_block_start","index":1,'
-            '"content_block":{"type":"text","text":""}}'
-        ),
-        (
-            'data: {"type":"content_block_delta","index":1,'
-            '"delta":{"type":"text_delta","text":"Answer"}}'
-        ),
+        ('data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}'),
+        ('data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}}'),
         'data: {"type":"content_block_stop","index":1}',
         'data: {"type":"message_stop"}',
     ]
@@ -532,9 +463,7 @@ async def test_anthropic_stream_events_thinking_skipped_in_stream_chat(
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client.stream_chat(
-        [{"role": "user", "content": "think about this"}]
-    ):
+    async for event in anthropic_client.stream_chat([{"role": "user", "content": "think about this"}]):
         events.append(event)
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
@@ -556,14 +485,8 @@ async def test_anthropic_stream_events_usage(anthropic_client):
             '"cache_read_input_tokens":5,'
             '"cache_creation_input_tokens":2}}}'
         ),
-        (
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"text","text":""}}'
-        ),
-        (
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":"Hi"}}'
-        ),
+        ('data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'),
+        ('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}'),
         'data: {"type":"content_block_stop","index":0}',
         'data: {"type":"message_delta","usage":{"output_tokens":3}}',
         'data: {"type":"message_stop"}',
@@ -572,9 +495,7 @@ async def test_anthropic_stream_events_usage(anthropic_client):
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client._stream_anthropic_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in anthropic_client._stream_anthropic_events([{"role": "user", "content": "hi"}]):
         events.append(event)
 
     usage_events = [e for e in events if e.type == "usage"]
@@ -597,27 +518,16 @@ async def test_anthropic_stream_events_usage(anthropic_client):
 async def test_anthropic_stream_chat_yields_events(anthropic_client):
     """stream_chat yields StreamEvent objects with correct types and deltas."""
     lines = [
-        (
-            'data: {"type":"content_block_start","index":0,'
-            '"content_block":{"type":"text","text":""}}'
-        ),
-        (
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":"Hey"}}'
-        ),
-        (
-            'data: {"type":"content_block_delta","index":0,'
-            '"delta":{"type":"text_delta","text":"!"}}'
-        ),
+        ('data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'),
+        ('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hey"}}'),
+        ('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}'),
         'data: {"type":"message_stop"}',
     ]
 
     anthropic_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in anthropic_client.stream_chat(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in anthropic_client.stream_chat([{"role": "user", "content": "hi"}]):
         events.append(event)
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]

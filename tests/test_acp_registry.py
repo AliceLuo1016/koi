@@ -12,9 +12,7 @@ from koi.acp_registry import (
 
 class TestAgentEntry:
     def test_is_available_with_binary(self):
-        entry = AgentEntry(
-            name="test", display_name="Test", command=["test"], check_binary="python3"
-        )
+        entry = AgentEntry(name="test", display_name="Test", command=["test"], check_binary="python3")
         assert entry.is_available() is True
 
     def test_is_unavailable(self):

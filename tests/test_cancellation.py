@@ -316,9 +316,7 @@ async def test_message_rollback_preserves_completed_iterations():
     # Iteration 1's messages (assistant + tool result) should be preserved
     assert len(agent.messages) > user_msg_index + 1
     # The assistant message with tool_calls from iteration 1 should be there
-    assert any(
-        m.get("role") == "assistant" and m.get("tool_calls") for m in agent.messages
-    )
+    assert any(m.get("role") == "assistant" and m.get("tool_calls") for m in agent.messages)
 
     await agent.llm_client.close()
 

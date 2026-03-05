@@ -214,9 +214,7 @@ class TestHardClear:
         ]
         for i in range(20):
             tc_id = f"tc_{i}"
-            msgs.append(
-                _assistant_with_tool_calls([_make_tool_call(tc_id, "exec_command")])
-            )
+            msgs.append(_assistant_with_tool_calls([_make_tool_call(tc_id, "exec_command")]))
             msgs.append(_tool_result(tc_id, big_content))
 
         # Protected tail
@@ -229,11 +227,7 @@ class TestHardClear:
         result = prune_context(msgs, context_tokens)
 
         # At least some tool results should be hard-cleared
-        cleared_count = sum(
-            1
-            for m in result
-            if m.get("role") == "tool" and m.get("content") == HARD_CLEAR_PLACEHOLDER
-        )
+        cleared_count = sum(1 for m in result if m.get("role") == "tool" and m.get("content") == HARD_CLEAR_PLACEHOLDER)
         assert cleared_count > 0
 
     def test_hard_clear_respects_min_prunable_chars(self):
@@ -416,10 +410,7 @@ class TestCompactionTimeout:
         # Summary (possibly timed-out) should be at index 0
         assert len(result) > 0
         summary_msg = result[0]
-        assert (
-            "timed out" in summary_msg["content"].lower()
-            or "summary" in summary_msg["content"].lower()
-        )
+        assert "timed out" in summary_msg["content"].lower() or "summary" in summary_msg["content"].lower()
 
 
 # ---------------------------------------------------------------------------

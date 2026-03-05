@@ -99,9 +99,7 @@ def test_create_default_config_with_params():
 
 def test_config_to_dict():
     """Test converting config to dictionary."""
-    config = Config(
-        api_base="https://test.com/v1", api_key="test-key", model="test-model"
-    )
+    config = Config(api_base="https://test.com/v1", api_key="test-key", model="test-model")
 
     config_dict = config.to_dict()
 
@@ -173,9 +171,7 @@ def test_load_uses_default_path(monkeypatch, tmp_path):
     koi_dir = tmp_path / ".koi"
     koi_dir.mkdir()
     cfg_file = koi_dir / "config.json"
-    cfg_file.write_text(
-        json.dumps({"api_base": "https://x.com", "api_key": "", "model": "m"})
-    )
+    cfg_file.write_text(json.dumps({"api_base": "https://x.com", "api_key": "", "model": "m"}))
     monkeypatch.chdir(tmp_path)
     config = Config.load()
     assert config.api_base == "https://x.com"

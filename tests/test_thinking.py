@@ -152,10 +152,7 @@ class TestAnthropicThinking:
             payload = mock_post.call_args[1]["json"]
             assert "thinking" in payload
             assert payload["thinking"]["type"] == "enabled"
-            assert (
-                payload["thinking"]["budget_tokens"]
-                == _ANTHROPIC_THINKING_BUDGETS["medium"]
-            )
+            assert payload["thinking"]["budget_tokens"] == _ANTHROPIC_THINKING_BUDGETS["medium"]
 
     @pytest.mark.asyncio
     async def test_payload_excludes_thinking_when_off(self):
@@ -247,9 +244,7 @@ class TestAnthropicThinking:
             }
             mock_response.raise_for_status = MagicMock()
 
-            with patch.object(
-                client.client, "post", new_callable=AsyncMock
-            ) as mock_post:
+            with patch.object(client.client, "post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value = mock_response
                 await client.chat([{"role": "user", "content": "test"}])
                 payload = mock_post.call_args[1]["json"]
@@ -398,9 +393,7 @@ class TestChatCompletionsThinking:
             }
             mock_response.raise_for_status = MagicMock()
 
-            with patch.object(
-                client.client, "post", new_callable=AsyncMock
-            ) as mock_post:
+            with patch.object(client.client, "post", new_callable=AsyncMock) as mock_post:
                 mock_post.return_value = mock_response
                 await client.chat([{"role": "user", "content": "test"}])
                 payload = mock_post.call_args[1]["json"]
@@ -428,9 +421,7 @@ class TestResponsesAPIThinking:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "id": "resp_1",
-            "output": [
-                {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
-            ],
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
         }
         mock_response.raise_for_status = MagicMock()
 
@@ -448,9 +439,7 @@ class TestResponsesAPIThinking:
         mock_response.status_code = 200
         mock_response.json.return_value = {
             "id": "resp_1",
-            "output": [
-                {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
-            ],
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": "hi"}]}],
         }
         mock_response.raise_for_status = MagicMock()
 

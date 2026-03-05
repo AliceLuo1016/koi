@@ -135,11 +135,7 @@ async def test_scan_workspace_returns_llm_content():
             api_key="test-key",
             model="test-model",
         )
-        mock_response = {
-            "choices": [
-                {"message": {"content": "## User\n- Name: Alice\n\n## Project\n- Koi"}}
-            ]
-        }
+        mock_response = {"choices": [{"message": {"content": "## User\n- Name: Alice\n\n## Project\n- Koi"}}]}
         with patch("koi.cli.LLMClient") as mock_llm:
             instance = AsyncMock()
             instance.chat = AsyncMock(return_value=mock_response)
@@ -156,9 +152,7 @@ async def test_scan_workspace_strips_whitespace():
     """_scan_workspace strips leading/trailing whitespace from LLM response."""
     with TemporaryDirectory() as tmp:
         config = Config(api_base="https://x.com", api_key="k", model="m")
-        mock_response = {
-            "choices": [{"message": {"content": "  \n## User\n- Name: Bob\n\n  "}}]
-        }
+        mock_response = {"choices": [{"message": {"content": "  \n## User\n- Name: Bob\n\n  "}}]}
 
         with patch("koi.cli.LLMClient") as mock_llm:
             instance = AsyncMock()
@@ -460,9 +454,7 @@ def test_remove_cron_command_error():
 def test_run_command_missing_config():
     """run command prints helpful error when .koi/config.json is missing."""
     runner = CliRunner()
-    with patch(
-        "koi.cli.Config.load", side_effect=FileNotFoundError(".koi/config.json")
-    ):
+    with patch("koi.cli.Config.load", side_effect=FileNotFoundError(".koi/config.json")):
         result = runner.invoke(main, ["run"])
     assert result.exit_code == 0
     assert "koi init" in result.output

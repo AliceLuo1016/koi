@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from .base import Channel, InboundMessage, OutboundMessage
 
 if TYPE_CHECKING:
-    from ..sessions import SessionManager
+    from koi.sessions import SessionManager
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +24,7 @@ def _import_slack_sdk():
 
         return AsyncWebClient, SocketModeClient, SocketModeRequest, SocketModeResponse
     except ImportError:
-        raise ImportError(
-            "Slack integration requires the 'server' extra. "
-            "Install with: pip install 'koi[server]'"
-        )
+        raise ImportError("Slack integration requires the 'server' extra. Install with: pip install 'koi[server]'")
 
 
 class SlackChannel(Channel):
@@ -144,9 +141,7 @@ class SlackChannel(Channel):
             return
 
         is_dm = channel_type == "im"
-        is_mention = event_type == "app_mention" or (
-            self._bot_user_id and f"<@{self._bot_user_id}>" in text
-        )
+        is_mention = event_type == "app_mention" or (self._bot_user_id and f"<@{self._bot_user_id}>" in text)
 
         # Mention gating: in channels, only respond to @mentions or app_mention events
         if not is_dm and self._mention_only and not is_mention:

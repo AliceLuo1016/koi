@@ -114,9 +114,7 @@ def test_sandbox_check_read_readonly():
 def test_sandbox_check_read_outside_allowed():
     """File outside all paths is denied."""
     with TemporaryDirectory() as td:
-        _write_sandbox_yaml(
-            Path(td), {"filesystem": {"allowed_paths": [str(Path(td) / "only")]}}
-        )
+        _write_sandbox_yaml(Path(td), {"filesystem": {"allowed_paths": [str(Path(td) / "only")]}})
         (Path(td) / "only").mkdir()
         sandbox = Sandbox(project_root=Path(td))
         allowed, reason = sandbox.check_read("/etc/passwd")

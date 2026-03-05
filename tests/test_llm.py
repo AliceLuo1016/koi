@@ -26,9 +26,7 @@ class _MockStreamResponse:
             mock_resp = MagicMock()
             mock_resp.status_code = self.status_code
             mock_resp.text = f"HTTP {self.status_code}"
-            raise httpx.HTTPStatusError(
-                f"{self.status_code}", request=mock_req, response=mock_resp
-            )
+            raise httpx.HTTPStatusError(f"{self.status_code}", request=mock_req, response=mock_resp)
 
     async def aiter_lines(self):
         for line in self._lines:
@@ -77,9 +75,7 @@ def cc_client():
 def test_system_prompt_becomes_instructions(client):
     """system_prompt parameter becomes instructions and developer message."""
     messages = [{"role": "user", "content": "Hi"}]
-    instructions, input_items = client._convert_messages_to_input(
-        messages, system_prompt="You are helpful."
-    )
+    instructions, input_items = client._convert_messages_to_input(messages, system_prompt="You are helpful.")
     assert instructions == "You are helpful."
     # Developer message prepended + user message
     assert len(input_items) == 2
@@ -190,9 +186,7 @@ def test_full_conversation_roundtrip(client):
         {"role": "assistant", "content": "The file says hello world."},
         {"role": "user", "content": "Thanks"},
     ]
-    instructions, input_items = client._convert_messages_to_input(
-        messages, system_prompt="Be helpful."
-    )
+    instructions, input_items = client._convert_messages_to_input(messages, system_prompt="Be helpful.")
     assert instructions == "Be helpful."
     # developer msg + user + function_call + function_call_output + assistant + user
     assert len(input_items) == 6
@@ -533,9 +527,7 @@ async def test_chat_completions_builds_correct_payload(cc_client):
 
     cc_client.client.post = fake_post
 
-    result = await cc_client.chat(
-        messages, tools=tools, system_prompt="You are helpful."
-    )
+    result = await cc_client.chat(messages, tools=tools, system_prompt="You are helpful.")
 
     # Verify CC payload structure
     assert captured_payload["model"] == "us/aws/anthropic/bedrock-claude-opus-4-6"
@@ -724,9 +716,7 @@ async def test_stream_responses_events_text_deltas(client):
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in client._stream_responses_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in client._stream_responses_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     text = "".join(e.delta for e in events if e.type == "text_delta")
     assert text == "Hello world"
@@ -739,21 +729,13 @@ async def test_stream_responses_events_tool_call(client):
             'data: {"type": "response.output_item.added", "item": '
             '{"type": "function_call", "call_id": "c1", "name": "read_file"}}'
         ),
-        (
-            'data: {"type": "response.function_call_arguments.delta", '
-            '"call_id": "c1", "delta": "{\\"path\\": "}'
-        ),
-        (
-            'data: {"type": "response.function_call_arguments.delta", '
-            '"call_id": "c1", "delta": "\\"x.txt\\"}"}'
-        ),
+        ('data: {"type": "response.function_call_arguments.delta", "call_id": "c1", "delta": "{\\"path\\": "}'),
+        ('data: {"type": "response.function_call_arguments.delta", "call_id": "c1", "delta": "\\"x.txt\\"}"}'),
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in client._stream_responses_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in client._stream_responses_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     starts = [e for e in events if e.type == "toolcall_start"]
     assert len(starts) == 1
@@ -777,17 +759,12 @@ async def test_stream_responses_events_completed(client):
     }
     lines = [
         'data: {"type": "response.output_text.delta", "delta": "Done!"}',
-        (
-            f'data: {{"type": "response.completed", '
-            f'"response": {_json.dumps(completed_resp)}}}'
-        ),
+        (f'data: {{"type": "response.completed", "response": {_json.dumps(completed_resp)}}}'),
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in client._stream_responses_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in client._stream_responses_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     text = "".join(e.delta for e in events if e.type == "text_delta")
     assert text == "Done!"
@@ -805,9 +782,7 @@ async def test_stream_responses_events_ignores_malformed_json(client):
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in client._stream_responses_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in client._stream_responses_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     text = "".join(e.delta for e in events if e.type == "text_delta")
     assert text == "ok"
@@ -905,9 +880,7 @@ def test_convert_messages_to_anthropic_system(anthropic_client):
     messages = [
         {"role": "user", "content": "Hi"},
     ]
-    system, msgs = anthropic_client._convert_messages_to_anthropic(
-        messages, system_prompt="Be helpful."
-    )
+    system, msgs = anthropic_client._convert_messages_to_anthropic(messages, system_prompt="Be helpful.")
     assert system == "Be helpful."
     assert len(msgs) == 1
     assert msgs[0]["role"] == "user"
@@ -1049,26 +1022,15 @@ async def test_chat_routes_to_anthropic(anthropic_client):
 async def test_stream_anthropic_events_assembles_text(anthropic_client):
     """_stream_anthropic_events yields text_delta events."""
     lines = [
-        (
-            '{"type": "content_block_start", "index": 0, '
-            '"content_block": {"type": "text", "text": ""}}'
-        ),
-        (
-            '{"type": "content_block_delta", "index": 0, '
-            '"delta": {"type": "text_delta", "text": "Hello"}}'
-        ),
-        (
-            '{"type": "content_block_delta", "index": 0, '
-            '"delta": {"type": "text_delta", "text": " world"}}'
-        ),
+        ('{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}'),
+        ('{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}'),
+        ('{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}}'),
         '{"type": "message_stop"}',
     ]
     sse_lines = [f"data: {entry}" for entry in lines]
     anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(sse_lines)
     events = []
-    async for event in anthropic_client._stream_anthropic_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in anthropic_client._stream_anthropic_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
     assert "".join(text_deltas) == "Hello world"
@@ -1077,21 +1039,13 @@ async def test_stream_anthropic_events_assembles_text(anthropic_client):
 async def test_stream_chat_yields_tokens_anthropic_format(anthropic_client):
     """stream_chat() yields StreamEvent objects for anthropic format."""
     lines = [
-        (
-            'data: {"type": "content_block_delta", '
-            '"delta": {"type": "text_delta", "text": "tok1"}}'
-        ),
-        (
-            'data: {"type": "content_block_delta", '
-            '"delta": {"type": "text_delta", "text": "tok2"}}'
-        ),
+        ('data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok1"}}'),
+        ('data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok2"}}'),
         "data: [DONE]",
     ]
     anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in anthropic_client.stream_chat(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in anthropic_client.stream_chat([{"role": "user", "content": "hi"}]):
         events.append(event)
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
     assert text_deltas == ["tok1", "tok2"]
@@ -1208,11 +1162,7 @@ async def test_retry_invalid_retry_after_falls_back_to_backoff(client):
             raise httpx.HTTPStatusError("429", request=MagicMock(), response=mock_resp)
         ok = MagicMock()
         ok.raise_for_status = lambda: None
-        ok.json.return_value = {
-            "output": [
-                {"type": "message", "content": [{"type": "output_text", "text": "ok"}]}
-            ]
-        }
+        ok.json.return_value = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]}
         return ok
 
     client.client.post = retryable_then_ok
@@ -1266,21 +1216,13 @@ async def test_stream_anthropic_skips_blank_and_malformed_lines():
         "",  # blank → skip
         "event: ping",  # no "data: " prefix → skip
         "data: {malformed json",  # bad JSON → skip
-        (
-            'data: {"type": "content_block_start", "index": 0, '
-            '"content_block": {"type": "text"}}'
-        ),
-        (
-            'data: {"type": "content_block_delta", "index": 0, '
-            '"delta": {"type": "text_delta", "text": "hello"}}'
-        ),
+        ('data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}'),
+        ('data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}}'),
         'data: {"type": "message_stop"}',
     ]
     anthro_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in anthro_client._stream_anthropic_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in anthro_client._stream_anthropic_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     text = "".join(e.delta for e in events if e.type == "text_delta")
     assert text == "hello"

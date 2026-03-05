@@ -191,9 +191,7 @@ class _MockStreamResponse:
             mock_resp = MagicMock()
             mock_resp.status_code = self.status_code
             mock_resp.text = f"HTTP {self.status_code}"
-            raise httpx.HTTPStatusError(
-                f"{self.status_code}", request=mock_req, response=mock_resp
-            )
+            raise httpx.HTTPStatusError(f"{self.status_code}", request=mock_req, response=mock_resp)
 
     async def aiter_lines(self):
         for line in self._lines:
@@ -328,9 +326,7 @@ class TestLLMClientStreamingUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            async for event in client._stream_responses_events(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client._stream_responses_events([{"role": "user", "content": "hi"}]):
                 if event.type == "usage":
                     client._extract_usage_from_event(event)
 
@@ -347,9 +343,7 @@ class TestLLMClientStreamingUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            async for event in client._stream_cc_events(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client._stream_cc_events([{"role": "user", "content": "hi"}]):
                 if event.type == "usage":
                     client._extract_usage_from_event(event)
 
@@ -366,23 +360,15 @@ class TestLLMClientStreamingUsage:
                 '"cache_read_input_tokens":100,'
                 '"cache_creation_input_tokens":50}}}'
             ),
-            (
-                'data: {"type":"content_block_start","index":0,'
-                '"content_block":{"type":"text","text":""}}'
-            ),
-            (
-                'data: {"type":"content_block_delta","index":0,'
-                '"delta":{"type":"text_delta","text":"hi"}}'
-            ),
+            ('data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'),
+            ('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}'),
             'data: {"type":"message_delta","usage":{"output_tokens":30}}',
             'data: {"type":"message_stop"}',
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
             events = []
-            async for event in client._stream_anthropic_events(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client._stream_anthropic_events([{"role": "user", "content": "hi"}]):
                 events.append(event)
             # Extract usage from events
             for event in events:
@@ -400,18 +386,9 @@ class TestLLMClientStreamingUsage:
         """Usage extracted from stream_chat (Anthropic events path)."""
         client = _make_client("anthropic", model="claude-sonnet-4")
         lines = [
-            (
-                'data: {"type":"message_start","message":'
-                '{"usage":{"input_tokens":300,"output_tokens":0}}}'
-            ),
-            (
-                'data: {"type":"content_block_start","index":0,'
-                '"content_block":{"type":"text","text":""}}'
-            ),
-            (
-                'data: {"type":"content_block_delta","index":0,'
-                '"delta":{"type":"text_delta","text":"world"}}'
-            ),
+            ('data: {"type":"message_start","message":{"usage":{"input_tokens":300,"output_tokens":0}}}'),
+            ('data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}'),
+            ('data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}'),
             'data: {"type":"message_delta","usage":{"output_tokens":20}}',
             'data: {"type":"message_stop"}',
         ]
@@ -587,9 +564,7 @@ class TestStreamingFallbackUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            async for event in client._stream_cc_events(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client._stream_cc_events([{"role": "user", "content": "hi"}]):
                 if event.type == "usage":
                     client._extract_usage_from_event(event)
 
@@ -607,9 +582,7 @@ class TestStreamingFallbackUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            async for event in client._stream_cc_events(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client._stream_cc_events([{"role": "user", "content": "hi"}]):
                 if event.type == "usage":
                     client._extract_usage_from_event(event)
 
@@ -625,9 +598,7 @@ class TestStreamingFallbackUsage:
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
-            async for event in client._stream_responses_events(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client._stream_responses_events([{"role": "user", "content": "hi"}]):
                 if event.type == "usage":
                     client._extract_usage_from_event(event)
 
@@ -658,9 +629,7 @@ class TestStreamingFallbackUsage:
 
         with patch.object(client.client, "stream", side_effect=mock_stream):
             events = []
-            async for event in client._stream_cc_events(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client._stream_cc_events([{"role": "user", "content": "hi"}]):
                 events.append(event)
 
         assert client._stream_include_usage is False

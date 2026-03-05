@@ -106,9 +106,7 @@ class TestStatusCommand:
 
     async def test_shows_cache_info_when_active(self, capsys):
         agent = _make_agent()
-        agent.llm_client.usage.add(
-            input_t=1000, output_t=100, cache_read=10200, cache_creation=1100
-        )
+        agent.llm_client.usage.add(input_t=1000, output_t=100, cache_read=10200, cache_creation=1100)
         await agent._handle_command("/status")
         captured = capsys.readouterr().out
         assert "Cache:" in captured
@@ -212,9 +210,7 @@ class TestCompactionCount:
         assert any("summary" in m.get("content", "").lower() for m in result)
 
         # Compact again
-        messages2 = result + [
-            {"role": "user", "content": f"Follow-up {i}"} for i in range(5)
-        ]
+        messages2 = result + [{"role": "user", "content": f"Follow-up {i}"} for i in range(5)]
         await compactor.compact_messages(messages2)
         assert compactor.compaction_count == 2
 

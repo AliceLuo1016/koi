@@ -74,9 +74,7 @@ def test_remove_job(mock_which, mock_popen, mock_run, cron_env):
     job_id = cm.add_job("0 * * * *", "test task")
 
     # Now mock crontab -l to return the job entry
-    mock_run.return_value = MagicMock(
-        returncode=0, stdout=f"0 * * * * some-script # koi-{job_id}\n"
-    )
+    mock_run.return_value = MagicMock(returncode=0, stdout=f"0 * * * * some-script # koi-{job_id}\n")
 
     cm.remove_job(job_id)
 
@@ -155,9 +153,7 @@ def test_clean_orphaned_jobs_marks_active(mock_run, cron_env):
             "active": False,
         }
     }
-    mock_run.return_value = MagicMock(
-        returncode=0, stdout="0 * * * * /some/script.sh # koi-abc12345\n"
-    )
+    mock_run.return_value = MagicMock(returncode=0, stdout="0 * * * * /some/script.sh # koi-abc12345\n")
     cm.clean_orphaned_jobs()
     assert cm._jobs_cache["abc12345"]["active"] is True
 
@@ -183,9 +179,7 @@ def test_clean_orphaned_jobs_marks_inactive(mock_run, cron_env):
 def test_clean_orphaned_jobs_no_crontab(mock_run, cron_env):
     """When no crontab exists, all jobs are marked inactive."""
     cm = CronManager()
-    cm._jobs_cache = {
-        "job1": {"id": "job1", "command": "0 * * * * /s.sh", "active": True}
-    }
+    cm._jobs_cache = {"job1": {"id": "job1", "command": "0 * * * * /s.sh", "active": True}}
     mock_run.return_value = MagicMock(returncode=1, stdout="")
     cm.clean_orphaned_jobs()
     assert cm._jobs_cache["job1"]["active"] is False
