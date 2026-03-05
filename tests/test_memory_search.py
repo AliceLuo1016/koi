@@ -1,10 +1,11 @@
 """Tests for memory search module."""
 
 import math
-from datetime import date
+import time
+from datetime import date, timedelta
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -13,6 +14,7 @@ from koi.memory_search import (
     MemorySearchManager,
     MemorySearchResult,
     _cosine_similarity,
+    _jaccard_similarity,
     _sha256,
     chunk_markdown,
 )
@@ -107,6 +109,26 @@ class TestCosineSimilarity:
         assert abs(_cosine_similarity(a, b) - expected) < 1e-6
 
 
+# ── Jaccard similarity tests ─────────────────────────
+
+
+class TestJaccardSimilarity:
+    def test_identical_texts(self):
+        assert abs(_jaccard_similarity("hello world", "hello world") - 1.0) < 1e-6
+
+    def test_disjoint_texts(self):
+        assert _jaccard_similarity("hello world", "foo bar") == 0.0
+
+    def test_partial_overlap(self):
+        sim = _jaccard_similarity("hello world foo", "hello bar foo")
+        # intersection = {hello, foo}, union = {hello, world, foo, bar}
+        assert abs(sim - 2 / 4) < 1e-6
+
+    def test_empty_text(self):
+        assert _jaccard_similarity("", "hello") == 0.0
+        assert _jaccard_similarity("hello", "") == 0.0
+
+
 # ── MemorySearchManager tests ─────────────────────────
 
 
@@ -125,10 +147,12 @@ def _mock_embeddings(texts: list[str]) -> list[list[float]]:
 
 
 class TestMemorySearchManager:
-    def test_unavailable_without_api_key(self):
+    def test_available_without_api_key(self):
+        """Manager is always available (keyword search works without API key)."""
         with TemporaryDirectory() as tmp:
             mgr = MemorySearchManager(koi_dir=Path(tmp), api_key="")
-            assert not mgr.available
+            assert mgr.available
+            mgr.close()
 
     def test_available_with_api_key(self):
         with TemporaryDirectory() as tmp:
@@ -140,6 +164,13 @@ class TestMemorySearchManager:
         with TemporaryDirectory() as tmp:
             koi_dir = Path(tmp)
             mgr = MemorySearchManager(koi_dir=koi_dir, api_key="test-key")
+            assert (koi_dir / "memory.sqlite").exists()
+            mgr.close()
+
+    def test_db_created_without_api_key(self):
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mgr = MemorySearchManager(koi_dir=koi_dir, api_key="")
             assert (koi_dir / "memory.sqlite").exists()
             mgr.close()
 
@@ -204,6 +235,9 @@ class TestMemorySearchSync:
 
             count = mgr._db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
             assert count > 0
+            # FTS table should also have entries
+            fts_count = mgr._db.execute("SELECT COUNT(*) FROM chunks_fts").fetchone()[0]
+            assert fts_count > 0
             mgr.close()
 
     def test_sync_removes_deleted_files(self):
@@ -222,6 +256,10 @@ class TestMemorySearchSync:
                 mgr.sync()
                 count = mgr._db.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
                 assert count == 0
+                fts_count = mgr._db.execute(
+                    "SELECT COUNT(*) FROM chunks_fts"
+                ).fetchone()[0]
+                assert fts_count == 0
             mgr.close()
 
     def test_sync_reindexes_changed_files(self):
@@ -242,8 +280,6 @@ class TestMemorySearchSync:
                 first_call_count = len(embed_calls)
 
                 # Modify file (need to also bump mtime cache)
-                import time
-
                 time.sleep(0.05)
                 mem_file.write_text("Modified content that is different.")
                 mgr._file_mtimes.clear()
@@ -289,6 +325,116 @@ class TestMemorySearchSync:
             mgr.close()
 
 
+# ── FTS5 keyword search tests ────────────────────────
+
+
+class TestKeywordSearch:
+    def test_keyword_search_returns_results(self):
+        """FTS5 keyword search returns results for exact token queries."""
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mem_file = koi_dir / "MEMORY.md"
+            mem_file.write_text("The user prefers dark mode for coding.")
+
+            mgr = MemorySearchManager(koi_dir=koi_dir, api_key="")
+            mgr.sync()
+
+            results = mgr._search_keyword("dark mode", max_results=5)
+            assert len(results) > 0
+            assert any("dark mode" in r.snippet for r in results)
+            mgr.close()
+
+    def test_keyword_search_no_match(self):
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mem_file = koi_dir / "MEMORY.md"
+            mem_file.write_text("The user prefers dark mode.")
+
+            mgr = MemorySearchManager(koi_dir=koi_dir, api_key="")
+            mgr.sync()
+
+            results = mgr._search_keyword("nonexistent_xyzzy_term", max_results=5)
+            assert len(results) == 0
+            mgr.close()
+
+    def test_keyword_only_fallback(self):
+        """When no API key is set, search falls back to keyword-only."""
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mem_file = koi_dir / "MEMORY.md"
+            mem_file.write_text(
+                "Python is great for scripting.\n\nRust is fast for systems."
+            )
+
+            mgr = MemorySearchManager(koi_dir=koi_dir, api_key="")
+            mgr.sync()
+
+            results = mgr.search("Python scripting")
+            assert len(results) > 0
+            assert any("Python" in r.snippet for r in results)
+            mgr.close()
+
+
+# ── Hybrid search tests ──────────────────────────────
+
+
+class TestHybridSearch:
+    def test_hybrid_merge_combines_scores(self):
+        """Hybrid merge combines vector + keyword scores correctly."""
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mem_file = koi_dir / "MEMORY.md"
+            mem_file.write_text(
+                "The user prefers dark mode.\n\nThe project uses Python 3.12."
+            )
+
+            mgr = MemorySearchManager(
+                koi_dir=koi_dir,
+                api_key="test-key",
+                vector_weight=0.7,
+                text_weight=0.3,
+            )
+
+            def mock_embed(texts):
+                results = []
+                for text in texts:
+                    if "dark mode" in text:
+                        results.append([0.9, 0.1, 0.1, 0.1])
+                    elif "Python" in text:
+                        results.append([0.1, 0.9, 0.1, 0.1])
+                    else:
+                        results.append([0.5, 0.5, 0.5, 0.5])
+                return results
+
+            with patch.object(mgr, "_get_embeddings", side_effect=mock_embed):
+                results = mgr.search("dark mode preference")
+
+            assert len(results) > 0
+            assert all(isinstance(r, MemorySearchResult) for r in results)
+            mgr.close()
+
+    def test_hybrid_disabled_uses_vector_only(self):
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mem_file = koi_dir / "MEMORY.md"
+            mem_file.write_text("Some content about testing.")
+
+            mgr = MemorySearchManager(
+                koi_dir=koi_dir,
+                api_key="test-key",
+                hybrid_enabled=False,
+            )
+
+            def mock_embed(texts):
+                return [[0.5, 0.5, 0.5, 0.5]] * len(texts)
+
+            with patch.object(mgr, "_get_embeddings", side_effect=mock_embed):
+                results = mgr.search("testing")
+
+            assert len(results) > 0
+            mgr.close()
+
+
 class TestMemorySearch:
     def test_search_returns_results(self):
         with TemporaryDirectory() as tmp:
@@ -322,12 +468,6 @@ class TestMemorySearch:
             assert all(isinstance(r, MemorySearchResult) for r in results)
             assert all(0 <= r.score <= 1 for r in results)
             mgr.close()
-
-    def test_search_empty_when_unavailable(self):
-        with TemporaryDirectory() as tmp:
-            mgr = MemorySearchManager(koi_dir=Path(tmp), api_key="")
-            results = mgr.search("anything")
-            assert results == []
 
     def test_search_respects_min_score(self):
         with TemporaryDirectory() as tmp:
@@ -381,6 +521,340 @@ class TestMemorySearch:
                 for r in results:
                     assert len(r.snippet) <= 700
             mgr.close()
+
+
+# ── Temporal decay tests ─────────────────────────────
+
+
+class TestTemporalDecay:
+    def test_decay_reduces_old_daily_scores(self):
+        """Temporal decay reduces scores for old dated files."""
+        today = date.today()
+        old_date = today - timedelta(days=60)
+        results = [
+            MemorySearchResult(
+                path=f"memory/{old_date.isoformat()}.md",
+                start_line=1,
+                end_line=5,
+                score=0.9,
+                snippet="old content",
+            ),
+            MemorySearchResult(
+                path=f"memory/{today.isoformat()}.md",
+                start_line=1,
+                end_line=5,
+                score=0.9,
+                snippet="today content",
+            ),
+        ]
+        decayed = MemorySearchManager._apply_temporal_decay(results, half_life_days=30)
+        # Old result should have lower score than today's
+        old_result = next(r for r in decayed if "old" in r.snippet)
+        today_result = next(r for r in decayed if "today" in r.snippet)
+        assert old_result.score < today_result.score
+        # 60 days with 30-day half-life = 2 half-lives, ~0.25x
+        assert old_result.score < 0.5 * 0.9
+
+    def test_decay_leaves_memory_md_untouched(self):
+        """MEMORY.md is not a dated file and should not be decayed."""
+        results = [
+            MemorySearchResult(
+                path="MEMORY.md",
+                start_line=1,
+                end_line=5,
+                score=0.9,
+                snippet="core memory",
+            ),
+        ]
+        decayed = MemorySearchManager._apply_temporal_decay(results, half_life_days=30)
+        assert decayed[0].score == 0.9
+
+    def test_decay_today_file_unchanged(self):
+        today = date.today()
+        results = [
+            MemorySearchResult(
+                path=f"memory/{today.isoformat()}.md",
+                start_line=1,
+                end_line=5,
+                score=0.8,
+                snippet="today",
+            ),
+        ]
+        decayed = MemorySearchManager._apply_temporal_decay(results, half_life_days=30)
+        assert abs(decayed[0].score - 0.8) < 0.01
+
+
+# ── MMR tests ────────────────────────────────────────
+
+
+class TestMMR:
+    def test_mmr_removes_near_duplicates(self):
+        """MMR should deprioritize near-duplicate results."""
+        results = [
+            MemorySearchResult(
+                path="MEMORY.md",
+                start_line=1,
+                end_line=5,
+                score=0.9,
+                snippet="the user prefers dark mode for editing code",
+            ),
+            MemorySearchResult(
+                path="MEMORY.md",
+                start_line=6,
+                end_line=10,
+                score=0.85,
+                snippet="the user prefers dark mode for editing code at night",
+            ),
+            MemorySearchResult(
+                path="MEMORY.md",
+                start_line=11,
+                end_line=15,
+                score=0.8,
+                snippet="python project uses fastapi and postgresql",
+            ),
+        ]
+        selected = MemorySearchManager._apply_mmr(
+            results, max_results=2, lambda_param=0.7
+        )
+        assert len(selected) == 2
+        # First result should be the highest scored
+        assert selected[0].score == 0.9
+        # Second should prefer diverse result over near-duplicate
+        snip = selected[1].snippet.lower()
+        assert "python" in snip or "fastapi" in snip
+
+    def test_mmr_empty_results(self):
+        assert MemorySearchManager._apply_mmr([], max_results=5) == []
+
+    def test_mmr_single_result(self):
+        results = [
+            MemorySearchResult(
+                path="MEMORY.md",
+                start_line=1,
+                end_line=5,
+                score=0.9,
+                snippet="test",
+            ),
+        ]
+        selected = MemorySearchManager._apply_mmr(results, max_results=5)
+        assert len(selected) == 1
+
+
+# ── Embedding cache tests ────────────────────────────
+
+
+class TestEmbeddingCache:
+    def test_cache_hit_avoids_api_call(self):
+        """Cache hit should avoid calling the API."""
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mgr = MemorySearchManager(
+                koi_dir=koi_dir, api_key="test-key", cache_enabled=True
+            )
+
+            # Pre-populate cache
+            text = "hello world"
+            text_hash = _sha256(text)
+            emb = [0.1, 0.2, 0.3, 0.4]
+            import json
+
+            mgr._db.execute(
+                """INSERT INTO embedding_cache
+                    (hash, embedding, updated_at)
+                    VALUES (?, ?, ?)""",
+                (text_hash, json.dumps(emb), int(time.time())),
+            )
+            mgr._db.commit()
+
+            api_calls = []
+            original_fetch = mgr._fetch_embeddings_api
+
+            def track_api(texts):
+                api_calls.append(texts)
+                return original_fetch(texts)
+
+            with patch.object(mgr, "_fetch_embeddings_api", side_effect=track_api):
+                result = mgr._get_embeddings([text])
+
+            assert len(api_calls) == 0
+            assert result == [emb]
+            mgr.close()
+
+    def test_cache_miss_calls_api_and_caches(self):
+        """Cache miss should call API and store result in cache."""
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mgr = MemorySearchManager(
+                koi_dir=koi_dir, api_key="test-key", cache_enabled=True
+            )
+
+            text = "hello world"
+            text_hash = _sha256(text)
+            emb = [0.1, 0.2, 0.3, 0.4]
+
+            with patch.object(mgr, "_fetch_embeddings_api", return_value=[emb]):
+                result = mgr._get_embeddings([text])
+
+            assert result == [emb]
+            # Check it's cached
+            import json
+
+            row = mgr._db.execute(
+                "SELECT embedding FROM embedding_cache WHERE hash = ?",
+                (text_hash,),
+            ).fetchone()
+            assert row is not None
+            assert json.loads(row[0]) == emb
+            mgr.close()
+
+    def test_cache_pruning_respects_max_entries(self):
+        """Cache pruning should remove oldest entries when over max."""
+        with TemporaryDirectory() as tmp:
+            koi_dir = Path(tmp)
+            mgr = MemorySearchManager(
+                koi_dir=koi_dir,
+                api_key="test-key",
+                cache_enabled=True,
+                cache_max_entries=3,
+            )
+
+            import json
+
+            # Insert 5 entries with increasing timestamps
+            for i in range(5):
+                mgr._db.execute(
+                    """INSERT INTO embedding_cache
+                    (hash, embedding, updated_at)
+                    VALUES (?, ?, ?)""",
+                    (f"hash_{i}", json.dumps([float(i)]), i),
+                )
+            mgr._db.commit()
+
+            mgr._prune_cache()
+            mgr._db.commit()
+
+            count = mgr._db.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[
+                0
+            ]
+            assert count == 3
+
+            # The oldest entries (hash_0, hash_1) should be gone
+            remaining = [
+                row[0]
+                for row in mgr._db.execute(
+                    "SELECT hash FROM embedding_cache ORDER BY updated_at"
+                ).fetchall()
+            ]
+            assert "hash_0" not in remaining
+            assert "hash_1" not in remaining
+            assert "hash_4" in remaining
+            mgr.close()
+
+
+# ── Pre-compaction flush tests ────────────────────────
+
+
+class TestPreCompactionFlush:
+    @pytest.mark.asyncio
+    async def test_flush_triggers_memory_save_turn(self):
+        """Pre-compaction flush should inject messages and run one LLM turn."""
+        from koi.config import Config
+
+        config = Config(api_key="test-key")
+
+        mock_llm = MagicMock()
+        mock_response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "NO_REPLY",
+                    }
+                }
+            ]
+        }
+        mock_llm.chat = AsyncMock(return_value=mock_response)
+        mock_llm.use_reasoning_tags = False
+        mock_llm.usage = MagicMock(total_requests=0)
+
+        with (
+            patch("koi.agent.LLMClient", return_value=mock_llm),
+            patch("koi.agent.build_system_prompt", return_value="system"),
+            patch("koi.agent.TranscriptLogger"),
+            patch("koi.agent.SessionManager"),
+            patch("koi.agent.MemorySearchManager"),
+        ):
+            from koi.agent import Agent
+
+            agent = Agent(config, non_interactive=True)
+            agent.messages = [{"role": "user", "content": "hello"}]
+
+            await agent._pre_compaction_memory_flush(tools=[])
+
+            assert agent._memory_flushed is True
+            # LLM chat should have been called
+            mock_llm.chat.assert_called_once()
+            # Check that flush messages were injected
+            call_args = mock_llm.chat.call_args
+            flush_msgs = call_args[0][0]
+            # Should contain the system + user flush messages
+            assert any(
+                "compaction" in str(m.get("content", "")).lower() for m in flush_msgs
+            )
+
+    @pytest.mark.asyncio
+    async def test_flush_executes_tool_calls(self):
+        """If the LLM calls update_memory during flush, it should be executed."""
+        from koi.config import Config
+
+        config = Config(api_key="test-key")
+
+        mock_llm = MagicMock()
+        mock_response = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "function": {
+                                    "name": "update_memory",
+                                    "arguments": (
+                                        '{"content": "test note", "target": "daily"}'
+                                    ),
+                                }
+                            }
+                        ],
+                    }
+                }
+            ]
+        }
+        mock_llm.chat = AsyncMock(return_value=mock_response)
+        mock_llm.use_reasoning_tags = False
+        mock_llm.usage = MagicMock(total_requests=0)
+
+        mock_executor = MagicMock()
+        mock_executor.execute = AsyncMock(return_value={"success": True})
+
+        with (
+            patch("koi.agent.LLMClient", return_value=mock_llm),
+            patch("koi.agent.build_system_prompt", return_value="system"),
+            patch("koi.agent.TranscriptLogger"),
+            patch("koi.agent.SessionManager"),
+            patch("koi.agent.MemorySearchManager"),
+        ):
+            from koi.agent import Agent
+
+            agent = Agent(config, non_interactive=True)
+            agent.tool_executor = mock_executor
+            agent.messages = [{"role": "user", "content": "hello"}]
+
+            await agent._pre_compaction_memory_flush(tools=[])
+
+            mock_executor.execute.assert_called_once_with(
+                "update_memory", {"content": "test note", "target": "daily"}
+            )
 
 
 # ── Tool integration tests ────────────────────────────
@@ -574,11 +1048,19 @@ class TestUpdateMemoryTool:
 
 
 class TestMemorySearchConfig:
-    def test_graceful_degradation_no_api_key(self):
+    def test_graceful_keyword_search_no_api_key(self):
+        """Without API key, keyword search still works."""
         with TemporaryDirectory() as tmp:
-            mgr = MemorySearchManager(koi_dir=Path(tmp), api_key="")
-            assert not mgr.available
-            assert mgr.search("anything") == []
+            koi_dir = Path(tmp)
+            mem_file = koi_dir / "MEMORY.md"
+            mem_file.write_text("test content for keyword search")
+            mgr = MemorySearchManager(koi_dir=koi_dir, api_key="")
+            assert mgr.available
+            mgr.sync()
+            results = mgr.search("keyword")
+            # Should get results from keyword search
+            assert isinstance(results, list)
+            mgr.close()
 
     def test_config_fields_loaded(self):
         from koi.config import Config
@@ -604,6 +1086,39 @@ class TestMemorySearchConfig:
         assert config.memory_search_model == "text-embedding-3-small"
         assert config.memory_search_api_key == ""
         assert config.memory_search_api_base == ""
+
+    def test_hybrid_config_fields(self):
+        from koi.config import Config
+
+        config = Config(
+            memory_search={
+                "hybrid": {"enabled": False, "vector_weight": 0.5, "text_weight": 0.5},
+                "temporal_decay": {"enabled": False, "half_life_days": 60},
+                "mmr": {"enabled": False, "lambda": 0.5},
+                "cache": {"enabled": False, "max_entries": 1000},
+            }
+        )
+        assert config.memory_search_hybrid_enabled is False
+        assert config.memory_search_hybrid_vector_weight == 0.5
+        assert config.memory_search_hybrid_text_weight == 0.5
+        assert config.memory_search_temporal_decay_enabled is False
+        assert config.memory_search_temporal_decay_half_life_days == 60
+        assert config.memory_search_mmr_enabled is False
+        assert config.memory_search_mmr_lambda == 0.5
+        assert config.memory_search_cache_enabled is False
+        assert config.memory_search_cache_max_entries == 1000
+
+    def test_compaction_config(self):
+        from koi.config import Config
+
+        config = Config(compaction={"memory_flush_enabled": False})
+        assert config.compaction_memory_flush_enabled is False
+
+    def test_compaction_config_defaults(self):
+        from koi.config import Config
+
+        config = Config()
+        assert config.compaction_memory_flush_enabled is True
 
 
 # ── Daily log tests (Memory class) ───────────────────

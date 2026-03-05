@@ -71,6 +71,7 @@ class Config:
         channels: dict[str, Any] = None,
         debug: bool = False,
         memory_search: dict[str, Any] = None,
+        compaction: dict[str, Any] = None,
     ):
         self.api_base = api_base
         self.model = model
@@ -105,6 +106,37 @@ class Config:
         self.memory_search_model: str = _ms.get("model", "text-embedding-3-small")
         self.memory_search_api_key: str = _ms.get("api_key", "")
         self.memory_search_api_base: str = _ms.get("api_base", "")
+
+        # Hybrid search config
+        _hybrid = _ms.get("hybrid", {})
+        self.memory_search_hybrid_enabled: bool = _hybrid.get("enabled", True)
+        self.memory_search_hybrid_vector_weight: float = _hybrid.get(
+            "vector_weight", 0.7
+        )
+        self.memory_search_hybrid_text_weight: float = _hybrid.get("text_weight", 0.3)
+
+        # Temporal decay config
+        _decay = _ms.get("temporal_decay", {})
+        self.memory_search_temporal_decay_enabled: bool = _decay.get("enabled", True)
+        self.memory_search_temporal_decay_half_life_days: int = _decay.get(
+            "half_life_days", 30
+        )
+
+        # MMR config
+        _mmr = _ms.get("mmr", {})
+        self.memory_search_mmr_enabled: bool = _mmr.get("enabled", True)
+        self.memory_search_mmr_lambda: float = _mmr.get("lambda", 0.7)
+
+        # Embedding cache config
+        _cache = _ms.get("cache", {})
+        self.memory_search_cache_enabled: bool = _cache.get("enabled", True)
+        self.memory_search_cache_max_entries: int = _cache.get("max_entries", 50000)
+
+        # Compaction config
+        _compaction = compaction or {}
+        self.compaction_memory_flush_enabled: bool = _compaction.get(
+            "memory_flush_enabled", True
+        )
 
         # Channel configs
         _channels = channels or {}
@@ -147,6 +179,7 @@ class Config:
             channels=data.get("channels"),
             debug=data.get("debug", False),
             memory_search=data.get("memory_search"),
+            compaction=data.get("compaction"),
         )
 
     def save(self, config_path: Path = None):

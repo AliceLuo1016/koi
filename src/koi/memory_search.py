@@ -5,8 +5,11 @@ import json
 import logging
 import math
 import os
+import re
 import sqlite3
+import time
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 
 import httpx
@@ -49,6 +52,17 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
     if norm_a == 0 or norm_b == 0:
         return 0.0
     return dot / (norm_a * norm_b)
+
+
+def _jaccard_similarity(text_a: str, text_b: str) -> float:
+    """Compute Jaccard similarity between two texts based on word tokens."""
+    tokens_a = set(text_a.lower().split())
+    tokens_b = set(text_b.lower().split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union)
 
 
 def chunk_markdown(
@@ -146,6 +160,16 @@ class MemorySearchManager:
         model: str = "text-embedding-3-small",
         api_key: str = "",
         api_base: str = "",
+        *,
+        hybrid_enabled: bool = True,
+        vector_weight: float = 0.7,
+        text_weight: float = 0.3,
+        temporal_decay_enabled: bool = True,
+        temporal_decay_half_life_days: int = 30,
+        mmr_enabled: bool = True,
+        mmr_lambda: float = 0.7,
+        cache_enabled: bool = True,
+        cache_max_entries: int = 50000,
     ):
         if koi_dir is None:
             koi_dir = Path.cwd() / ".koi"
@@ -156,10 +180,28 @@ class MemorySearchManager:
         self.api_base = api_base
         self._db: sqlite3.Connection | None = None
         self._file_mtimes: dict[str, float] = {}
-        self._available = bool(self.api_key)
+        self._has_api_key = bool(self.api_key)
+        # Available means at least keyword search works (always true now)
+        self._available = True
 
-        if self._available:
-            self._init_db()
+        # Hybrid search config
+        self.hybrid_enabled = hybrid_enabled
+        self.vector_weight = vector_weight
+        self.text_weight = text_weight
+
+        # Temporal decay config
+        self.temporal_decay_enabled = temporal_decay_enabled
+        self.temporal_decay_half_life_days = temporal_decay_half_life_days
+
+        # MMR config
+        self.mmr_enabled = mmr_enabled
+        self.mmr_lambda = mmr_lambda
+
+        # Embedding cache config
+        self.cache_enabled = cache_enabled
+        self.cache_max_entries = cache_max_entries
+
+        self._init_db()
 
     @property
     def available(self) -> bool:
@@ -198,6 +240,24 @@ class MemorySearchManager:
             """CREATE INDEX IF NOT EXISTS idx_chunks_hash
                ON chunks(chunk_hash)"""
         )
+
+        # FTS5 full-text search table
+        self._db.execute(
+            """CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+                text, id UNINDEXED, path UNINDEXED,
+                start_line UNINDEXED, end_line UNINDEXED
+            )"""
+        )
+
+        # Embedding cache table
+        self._db.execute(
+            """CREATE TABLE IF NOT EXISTS embedding_cache (
+                hash TEXT PRIMARY KEY,
+                embedding TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            )"""
+        )
+
         self._db.commit()
 
         # Check if model/provider changed — reindex if so
@@ -212,6 +272,7 @@ class MemorySearchManager:
                 self.model,
             )
             self._db.execute("DELETE FROM chunks")
+            self._db.execute("DELETE FROM chunks_fts")
             self._db.commit()
             self._set_meta("provider", self.provider)
             self._set_meta("model", self.model)
@@ -269,7 +330,16 @@ class MemorySearchManager:
         # Delete chunks for removed files
         removed = indexed_paths - current_rel_paths
         for rp in removed:
+            # Get chunk IDs before deleting for FTS cleanup
+            chunk_ids = [
+                row[0]
+                for row in self._db.execute(
+                    "SELECT id FROM chunks WHERE file_path = ?", (rp,)
+                ).fetchall()
+            ]
             self._db.execute("DELETE FROM chunks WHERE file_path = ?", (rp,))
+            for cid in chunk_ids:
+                self._db.execute("DELETE FROM chunks_fts WHERE id = ?", (str(cid),))
         if removed:
             self._db.commit()
 
@@ -312,7 +382,9 @@ class MemorySearchManager:
         # Delete chunks that no longer exist
         removed_hashes = existing_hashes - new_hashes
         for h in removed_hashes:
-            self._db.execute("DELETE FROM chunks WHERE id = ?", (existing[h],))
+            chunk_id = existing[h]
+            self._db.execute("DELETE FROM chunks WHERE id = ?", (chunk_id,))
+            self._db.execute("DELETE FROM chunks_fts WHERE id = ?", (str(chunk_id),))
 
         # Find chunks that need embedding (new ones)
         chunks_to_embed = [c for c in new_chunks if c.hash not in existing_hashes]
@@ -320,22 +392,42 @@ class MemorySearchManager:
         if chunks_to_embed:
             texts = [c.text for c in chunks_to_embed]
             embeddings = self._get_embeddings(texts)
-            if embeddings:
-                for chunk, emb in zip(chunks_to_embed, embeddings):
-                    self._db.execute(
-                        """INSERT INTO chunks
-                           (file_path, start_line, end_line,
-                            chunk_text, chunk_hash, embedding)
-                           VALUES (?, ?, ?, ?, ?, ?)""",
-                        (
-                            rel_path,
-                            chunk.start_line,
-                            chunk.end_line,
-                            chunk.text,
-                            chunk.hash,
-                            json.dumps(emb),
-                        ),
-                    )
+            # If no embeddings (no API key), store empty embeddings
+            if not embeddings:
+                embeddings = ["[]"] * len(texts)
+                use_empty = True
+            else:
+                use_empty = False
+
+            for chunk, emb in zip(chunks_to_embed, embeddings):
+                emb_json = emb if use_empty else json.dumps(emb)
+                cursor = self._db.execute(
+                    """INSERT INTO chunks
+                       (file_path, start_line, end_line,
+                        chunk_text, chunk_hash, embedding)
+                       VALUES (?, ?, ?, ?, ?, ?)""",
+                    (
+                        rel_path,
+                        chunk.start_line,
+                        chunk.end_line,
+                        chunk.text,
+                        chunk.hash,
+                        emb_json,
+                    ),
+                )
+                # Insert into FTS5 table
+                chunk_id = cursor.lastrowid
+                self._db.execute(
+                    """INSERT INTO chunks_fts (text, id, path, start_line, end_line)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (
+                        chunk.text,
+                        str(chunk_id),
+                        rel_path,
+                        str(chunk.start_line),
+                        str(chunk.end_line),
+                    ),
+                )
 
         # Update line numbers for existing chunks that weren't removed
         for chunk in new_chunks:
@@ -349,7 +441,67 @@ class MemorySearchManager:
         self._db.commit()
 
     def _get_embeddings(self, texts: list[str]) -> list[list[float]]:
-        """Get embeddings from OpenAI-compatible API."""
+        """Get embeddings from OpenAI-compatible API, with caching."""
+        if not texts:
+            return []
+        if not self._has_api_key:
+            return []
+
+        assert self._db is not None
+        results: list[list[float] | None] = [None] * len(texts)
+        texts_to_fetch: list[tuple[int, str, str]] = []  # (index, text, hash)
+
+        # Check cache first
+        if self.cache_enabled:
+            for i, text in enumerate(texts):
+                text_hash = _sha256(text)
+                row = self._db.execute(
+                    "SELECT embedding FROM embedding_cache WHERE hash = ?",
+                    (text_hash,),
+                ).fetchone()
+                if row:
+                    results[i] = json.loads(row[0])
+                    # Update timestamp for LRU
+                    self._db.execute(
+                        "UPDATE embedding_cache SET updated_at = ? WHERE hash = ?",
+                        (int(time.time()), text_hash),
+                    )
+                else:
+                    texts_to_fetch.append((i, text, text_hash))
+        else:
+            for i, text in enumerate(texts):
+                texts_to_fetch.append((i, text, _sha256(text)))
+
+        # Fetch missing embeddings from API
+        if texts_to_fetch:
+            fetch_texts = [t[1] for t in texts_to_fetch]
+            fetched = self._fetch_embeddings_api(fetch_texts)
+            if fetched:
+                now = int(time.time())
+                for (idx, _text, text_hash), emb in zip(texts_to_fetch, fetched):
+                    results[idx] = emb
+                    # Store in cache
+                    if self.cache_enabled:
+                        self._db.execute(
+                            """INSERT OR REPLACE INTO embedding_cache
+                               (hash, embedding, updated_at)
+                               VALUES (?, ?, ?)""",
+                            (text_hash, json.dumps(emb), now),
+                        )
+                if self.cache_enabled:
+                    self._prune_cache()
+                    self._db.commit()
+            else:
+                return []
+
+        # Filter out any None entries (shouldn't happen if API succeeded)
+        final = [r for r in results if r is not None]
+        if len(final) != len(texts):
+            return []
+        return final
+
+    def _fetch_embeddings_api(self, texts: list[str]) -> list[list[float]]:
+        """Fetch embeddings from the API (no caching)."""
         if not texts:
             return []
 
@@ -376,26 +528,30 @@ class MemorySearchManager:
             logger.error("Failed to get embeddings: %s", e)
             return []
 
-    def search(
-        self,
-        query: str,
-        max_results: int = 5,
-        min_score: float = 0.0,
-    ) -> list[MemorySearchResult]:
-        """Search memory using semantic similarity."""
-        if not self._available or self._db is None:
+    def _prune_cache(self) -> None:
+        """Prune embedding cache to max_entries using LRU."""
+        assert self._db is not None
+        count = self._db.execute("SELECT COUNT(*) FROM embedding_cache").fetchone()[0]
+        if count > self.cache_max_entries:
+            excess = count - self.cache_max_entries
+            self._db.execute(
+                """DELETE FROM embedding_cache WHERE hash IN (
+                    SELECT hash FROM embedding_cache
+                    ORDER BY updated_at ASC LIMIT ?
+                )""",
+                (excess,),
+            )
+
+    def _search_vector(self, query: str, max_results: int) -> list[MemorySearchResult]:
+        """Search using vector similarity."""
+        if not self._has_api_key or self._db is None:
             return []
 
-        # Sync before searching
-        self.sync()
-
-        # Embed the query
         embeddings = self._get_embeddings([query])
         if not embeddings:
             return []
         query_embedding = embeddings[0]
 
-        # Compare against all stored chunks
         rows = self._db.execute(
             "SELECT file_path, start_line, end_line, chunk_text, embedding FROM chunks"
         ).fetchall()
@@ -403,9 +559,9 @@ class MemorySearchManager:
         scored: list[MemorySearchResult] = []
         for file_path, start_line, end_line, chunk_text, emb_json in rows:
             chunk_embedding = json.loads(emb_json)
-            score = _cosine_similarity(query_embedding, chunk_embedding)
-            if score < min_score:
+            if not chunk_embedding:
                 continue
+            score = _cosine_similarity(query_embedding, chunk_embedding)
             snippet = chunk_text[:SNIPPET_MAX_CHARS]
             scored.append(
                 MemorySearchResult(
@@ -417,9 +573,188 @@ class MemorySearchManager:
                 )
             )
 
-        # Sort by score descending
         scored.sort(key=lambda r: r.score, reverse=True)
         return scored[:max_results]
+
+    def _search_keyword(self, query: str, max_results: int) -> list[MemorySearchResult]:
+        """Search using FTS5 BM25 keyword matching."""
+        if self._db is None:
+            return []
+
+        # Escape FTS5 special characters and build query
+        # Split into tokens and join with space for implicit AND
+        tokens = query.split()
+        if not tokens:
+            return []
+        # Quote each token to avoid FTS5 syntax issues
+        fts_query = " ".join(f'"{t}"' for t in tokens)
+
+        try:
+            rows = self._db.execute(
+                """SELECT id, path, start_line, end_line, text, rank
+                   FROM chunks_fts WHERE chunks_fts MATCH ?
+                   ORDER BY rank LIMIT ?""",
+                (fts_query, max_results),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # FTS query syntax error — fall back gracefully
+            return []
+
+        results: list[MemorySearchResult] = []
+        for _id, path, start_line, end_line, text, rank in rows:
+            # Convert BM25 rank to 0-1 score (rank is negative, lower = better)
+            text_score = 1 / (1 + max(0, -rank))
+            snippet = text[:SNIPPET_MAX_CHARS]
+            results.append(
+                MemorySearchResult(
+                    path=path,
+                    start_line=int(start_line),
+                    end_line=int(end_line),
+                    score=round(text_score, 4),
+                    snippet=snippet,
+                )
+            )
+
+        return results
+
+    def search(
+        self,
+        query: str,
+        max_results: int = 5,
+        min_score: float = 0.0,
+    ) -> list[MemorySearchResult]:
+        """Search memory using hybrid vector + keyword search."""
+        if not self._available or self._db is None:
+            return []
+
+        # Sync before searching
+        self.sync()
+
+        # Gather more candidates than needed for post-processing
+        fetch_count = max_results * 3
+
+        vector_results: list[MemorySearchResult] = []
+        keyword_results: list[MemorySearchResult] = []
+
+        # Run vector search if API key available
+        if self._has_api_key:
+            vector_results = self._search_vector(query, fetch_count)
+
+        # Run keyword search
+        keyword_results = self._search_keyword(query, fetch_count)
+
+        # Merge results (hybrid)
+        if self.hybrid_enabled and vector_results and keyword_results:
+            scored = self._merge_hybrid(vector_results, keyword_results)
+        elif vector_results:
+            scored = vector_results
+        elif keyword_results:
+            scored = keyword_results
+        else:
+            return []
+
+        # Filter by min_score
+        if min_score > 0:
+            scored = [r for r in scored if r.score >= min_score]
+
+        # Apply temporal decay
+        if self.temporal_decay_enabled:
+            scored = self._apply_temporal_decay(
+                scored, self.temporal_decay_half_life_days
+            )
+
+        # Sort by score descending
+        scored.sort(key=lambda r: r.score, reverse=True)
+
+        # Apply MMR re-ranking
+        if self.mmr_enabled:
+            scored = self._apply_mmr(scored, max_results, self.mmr_lambda)
+        else:
+            scored = scored[:max_results]
+
+        return scored
+
+    def _merge_hybrid(
+        self,
+        vector_results: list[MemorySearchResult],
+        keyword_results: list[MemorySearchResult],
+    ) -> list[MemorySearchResult]:
+        """Merge vector and keyword results with weighted scoring."""
+        # Build lookup by unique key (path, start_line, end_line)
+        merged: dict[tuple, MemorySearchResult] = {}
+
+        for r in vector_results:
+            key = (r.path, r.start_line, r.end_line)
+            merged[key] = MemorySearchResult(
+                path=r.path,
+                start_line=r.start_line,
+                end_line=r.end_line,
+                score=round(self.vector_weight * r.score, 4),
+                snippet=r.snippet,
+            )
+
+        for r in keyword_results:
+            key = (r.path, r.start_line, r.end_line)
+            if key in merged:
+                merged[key].score = round(
+                    merged[key].score + self.text_weight * r.score, 4
+                )
+            else:
+                merged[key] = MemorySearchResult(
+                    path=r.path,
+                    start_line=r.start_line,
+                    end_line=r.end_line,
+                    score=round(self.text_weight * r.score, 4),
+                    snippet=r.snippet,
+                )
+
+        results = list(merged.values())
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results
+
+    @staticmethod
+    def _apply_temporal_decay(
+        results: list[MemorySearchResult], half_life_days: int = 30
+    ) -> list[MemorySearchResult]:
+        """Apply exponential decay to scores from dated daily files."""
+        today = date.today()
+        decay_lambda = math.log(2) / half_life_days
+        for r in results:
+            m = re.match(r"memory/(\d{4}-\d{2}-\d{2})\.md$", r.path)
+            if m:
+                file_date = date.fromisoformat(m.group(1))
+                age_days = (today - file_date).days
+                r.score *= math.exp(-decay_lambda * max(0, age_days))
+                r.score = round(r.score, 4)
+        # Re-sort after decay
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results
+
+    @staticmethod
+    def _apply_mmr(
+        results: list[MemorySearchResult],
+        max_results: int,
+        lambda_param: float = 0.7,
+    ) -> list[MemorySearchResult]:
+        """Apply Maximal Marginal Relevance to reduce redundant results."""
+        if not results:
+            return results
+        selected = [results[0]]
+        candidates = list(results[1:])
+        while candidates and len(selected) < max_results:
+            best_score = -float("inf")
+            best_idx = 0
+            for i, cand in enumerate(candidates):
+                relevance = cand.score
+                max_sim = max(
+                    _jaccard_similarity(cand.snippet, s.snippet) for s in selected
+                )
+                mmr_score = lambda_param * relevance - (1 - lambda_param) * max_sim
+                if mmr_score > best_score:
+                    best_score = mmr_score
+                    best_idx = i
+            selected.append(candidates.pop(best_idx))
+        return selected
 
     def close(self) -> None:
         """Close the database connection."""

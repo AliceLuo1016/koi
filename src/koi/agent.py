@@ -103,7 +103,7 @@ class Agent:
         self.subagent_manager = SubagentManager(config)
         self.subagent_manager._on_complete = self._on_subagent_complete
 
-        # Memory search (graceful if no API key or config missing)
+        # Memory search (graceful if no API key — falls back to keyword-only)
         try:
             ms_provider = (
                 getattr(config, "memory_search_provider", "openai") or "openai"
@@ -130,21 +130,39 @@ class Agent:
                 if isinstance(api_key_val, str):
                     ms_api_key = api_key_val
             koi_dir = Path.cwd() / ".koi"
-            if ms_api_key:
-                self.memory_search_manager = MemorySearchManager(
-                    koi_dir=koi_dir,
-                    provider=ms_provider,
-                    model=ms_model,
-                    api_key=ms_api_key,
-                    api_base=ms_api_base,
-                )
-            else:
-                import logging as _logging
 
-                _logging.getLogger("koi.memory_search").warning(
-                    "Memory search disabled: no embedding API key configured"
-                )
-                self.memory_search_manager = None
+            def _bool_attr(name: str, default: bool) -> bool:
+                val = getattr(config, name, default)
+                return val if isinstance(val, bool) else default
+
+            def _float_attr(name: str, default: float) -> float:
+                val = getattr(config, name, default)
+                return val if isinstance(val, int | float) else default
+
+            def _int_attr(name: str, default: int) -> int:
+                val = getattr(config, name, default)
+                return val if isinstance(val, int) else default
+
+            self.memory_search_manager = MemorySearchManager(
+                koi_dir=koi_dir,
+                provider=ms_provider,
+                model=ms_model,
+                api_key=ms_api_key,
+                api_base=ms_api_base,
+                hybrid_enabled=_bool_attr("memory_search_hybrid_enabled", True),
+                vector_weight=_float_attr("memory_search_hybrid_vector_weight", 0.7),
+                text_weight=_float_attr("memory_search_hybrid_text_weight", 0.3),
+                temporal_decay_enabled=_bool_attr(
+                    "memory_search_temporal_decay_enabled", True
+                ),
+                temporal_decay_half_life_days=_int_attr(
+                    "memory_search_temporal_decay_half_life_days", 30
+                ),
+                mmr_enabled=_bool_attr("memory_search_mmr_enabled", True),
+                mmr_lambda=_float_attr("memory_search_mmr_lambda", 0.7),
+                cache_enabled=_bool_attr("memory_search_cache_enabled", True),
+                cache_max_entries=_int_attr("memory_search_cache_max_entries", 50000),
+            )
         except Exception:
             self.memory_search_manager = None
 
@@ -160,6 +178,7 @@ class Agent:
         self.running = False
         self._current_task: asyncio.Task | None = None
         self._prompt_session = None
+        self._memory_flushed = False
 
         if not non_interactive:
             # Set up prompt_toolkit session with custom key bindings
@@ -492,6 +511,12 @@ class Agent:
 
             # Check if compaction is needed
             if self.compactor.needs_compaction(self.messages):
+                # Pre-compaction memory flush
+                if not self._memory_flushed and getattr(
+                    self.config, "compaction_memory_flush_enabled", True
+                ):
+                    await self._pre_compaction_memory_flush(tools)
+
                 if not non_interactive:
                     console.print(
                         "🔄 Compacting conversation history...", style="yellow"
@@ -499,6 +524,7 @@ class Agent:
 
                 try:
                     self.messages = await self.compactor.compact_messages(self.messages)
+                    self._memory_flushed = False
                     if not self._ephemeral:
                         self.session_manager.save_compaction(
                             "Auto-compaction", tokens_before=0
@@ -745,6 +771,51 @@ class Agent:
                 if non_interactive:
                     print(error_msg)
                 break
+
+    async def _pre_compaction_memory_flush(self, tools: list[dict[str, Any]]) -> None:
+        """Run one LLM turn to let the agent save durable memories before compaction."""
+        flush_messages = list(self.messages)
+        flush_messages.append(
+            {
+                "role": "system",
+                "content": "Session nearing compaction. Store durable memories now.",
+            }
+        )
+        flush_messages.append(
+            {
+                "role": "user",
+                "content": (
+                    "Write any lasting notes to the daily memory log. "
+                    "Reply with NO_REPLY if nothing to store."
+                ),
+            }
+        )
+
+        try:
+            response = await self.llm_client.chat(
+                flush_messages,
+                tools=tools,
+                system_prompt=self.system_prompt,
+            )
+            self._memory_flushed = True
+
+            if response.get("choices"):
+                message = response["choices"][0]["message"]
+                # Execute any tool calls (e.g. update_memory)
+                if message.get("tool_calls"):
+                    for tool_call in message["tool_calls"]:
+                        func_name = tool_call["function"]["name"]
+                        try:
+                            args = json.loads(tool_call["function"]["arguments"])
+                        except (json.JSONDecodeError, KeyError):
+                            continue
+                        try:
+                            await self.tool_executor.execute(func_name, args)
+                        except Exception:
+                            pass
+        except Exception:
+            # Flush is best-effort; don't block compaction
+            self._memory_flushed = True
 
     async def _stream_response(
         self,
