@@ -57,8 +57,11 @@ def build_system_prompt(
 
     # 6. Memory guidance
     sections.append("""## Memory
-Before answering questions about prior work, decisions,
-or preferences: check memory first using update_memory.
+Use `memory_search` before answering questions about prior work,
+decisions, dates, people, preferences, or project history.
+Use `memory_get` to pull full context around search results.
+Use `update_memory` to save important information (target='daily'
+for session notes, target='long_term' for MEMORY.md).
 When analyzing logs, use create_alert / list_alerts /
 resolve_alert for structured issue tracking.""")
 

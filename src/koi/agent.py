@@ -34,6 +34,7 @@ from .errors import (
 )
 from .llm import LLMClient
 from .memory import Memory
+from .memory_search import MemorySearchManager
 from .prompts import build_system_prompt, build_tool_result_message
 from .sandbox import Sandbox
 from .session_manager import SessionManager
@@ -101,8 +102,57 @@ class Agent:
         self.sandbox = Sandbox()
         self.subagent_manager = SubagentManager(config)
         self.subagent_manager._on_complete = self._on_subagent_complete
+
+        # Memory search (graceful if no API key or config missing)
+        try:
+            ms_provider = (
+                getattr(config, "memory_search_provider", "openai") or "openai"
+            )
+            ms_model = (
+                getattr(config, "memory_search_model", "text-embedding-3-small")
+                or "text-embedding-3-small"
+            )
+            ms_api_key = getattr(config, "memory_search_api_key", "") or ""
+            ms_api_base = getattr(config, "memory_search_api_base", "") or ""
+            # Ensure values are actually strings (not Mock objects)
+            if not isinstance(ms_provider, str):
+                ms_provider = "openai"
+            if not isinstance(ms_model, str):
+                ms_model = "text-embedding-3-small"
+            if not isinstance(ms_api_key, str):
+                ms_api_key = ""
+            if not isinstance(ms_api_base, str):
+                ms_api_base = ""
+            if not ms_api_key:
+                ms_api_key = os.getenv("KOI_API_KEY", "")
+            if not ms_api_key and ms_provider == "openai":
+                api_key_val = getattr(config, "api_key", "")
+                if isinstance(api_key_val, str):
+                    ms_api_key = api_key_val
+            koi_dir = Path.cwd() / ".koi"
+            if ms_api_key:
+                self.memory_search_manager = MemorySearchManager(
+                    koi_dir=koi_dir,
+                    provider=ms_provider,
+                    model=ms_model,
+                    api_key=ms_api_key,
+                    api_base=ms_api_base,
+                )
+            else:
+                import logging as _logging
+
+                _logging.getLogger("koi.memory_search").warning(
+                    "Memory search disabled: no embedding API key configured"
+                )
+                self.memory_search_manager = None
+        except Exception:
+            self.memory_search_manager = None
+
         self.tool_executor = ToolExecutor(
-            self.skills_manager, self.sandbox, self.subagent_manager
+            self.skills_manager,
+            self.sandbox,
+            self.subagent_manager,
+            memory_search_manager=self.memory_search_manager,
         )
         self.compactor = ContextCompactor(self.llm_client, config.context_window)
 

@@ -69,7 +69,7 @@ def test_tool_names():
 
 
 def test_all_tool_names_present():
-    """Verify all 22 tools are defined."""
+    """Verify all 24 tools are defined."""
     tools = get_tool_definitions()
     tool_names = {tool["function"]["name"] for tool in tools}
     expected = {
@@ -82,6 +82,8 @@ def test_all_tool_names_present():
         "web_search",
         "web_fetch",
         "update_memory",
+        "memory_search",
+        "memory_get",
         "read_skill",
         "add_cron_job",
         "list_cron_jobs",
@@ -383,7 +385,9 @@ async def test_tool_executor_update_memory():
             tool_call = {
                 "function": {
                     "name": "update_memory",
-                    "arguments": json.dumps({"content": "remember this"}),
+                    "arguments": json.dumps(
+                        {"content": "remember this", "target": "long_term"}
+                    ),
                 }
             }
 
@@ -1039,6 +1043,7 @@ async def test_tool_executor_update_memory_error():
             executor = ToolExecutor(Mock())
             with patch("koi.memory.Memory") as mock_mem:
                 mock_mem.return_value.append.side_effect = OSError("disk full")
+                mock_mem.return_value.append_daily.side_effect = OSError("disk full")
                 tool_call = {
                     "function": {
                         "name": "update_memory",

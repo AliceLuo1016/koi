@@ -70,6 +70,7 @@ class Config:
         server: dict[str, Any] = None,
         channels: dict[str, Any] = None,
         debug: bool = False,
+        memory_search: dict[str, Any] = None,
     ):
         self.api_base = api_base
         self.model = model
@@ -97,6 +98,13 @@ class Config:
 
         # Debug transcript logging
         self.debug = debug
+
+        # Memory search config
+        _ms = memory_search or {}
+        self.memory_search_provider: str = _ms.get("provider", "openai")
+        self.memory_search_model: str = _ms.get("model", "text-embedding-3-small")
+        self.memory_search_api_key: str = _ms.get("api_key", "")
+        self.memory_search_api_base: str = _ms.get("api_base", "")
 
         # Channel configs
         _channels = channels or {}
@@ -138,6 +146,7 @@ class Config:
             server=data.get("server"),
             channels=data.get("channels"),
             debug=data.get("debug", False),
+            memory_search=data.get("memory_search"),
         )
 
     def save(self, config_path: Path = None):

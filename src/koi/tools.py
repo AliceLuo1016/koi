@@ -231,9 +231,9 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                 "name": "update_memory",
                 "description": (
                     "Append important information to "
-                    "persistent memory (.koi/MEMORY.md). "
-                    "Use this to remember preferences, "
-                    "decisions, and context across sessions."
+                    "persistent memory. Use this to remember "
+                    "preferences, decisions, and context "
+                    "across sessions."
                 ),
                 "parameters": {
                     "type": "object",
@@ -241,9 +241,86 @@ def get_tool_definitions() -> list[dict[str, Any]]:
                         "content": {
                             "type": "string",
                             "description": "Text to append to memory",
-                        }
+                        },
+                        "target": {
+                            "type": "string",
+                            "enum": ["long_term", "daily"],
+                            "description": (
+                                "Where to write: 'long_term' "
+                                "(MEMORY.md) or 'daily' "
+                                "(today's daily log). "
+                                "Default: daily"
+                            ),
+                        },
                     },
                     "required": ["content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_search",
+                "description": (
+                    "Semantically search memory files "
+                    "(MEMORY.md and memory/*.md) for "
+                    "relevant context. Use before answering "
+                    "questions about prior work, decisions, "
+                    "preferences, or project history."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query",
+                        },
+                        "max_results": {
+                            "type": "integer",
+                            "description": ("Max results (default 5)"),
+                        },
+                        "min_score": {
+                            "type": "number",
+                            "description": (
+                                "Minimum similarity score 0-1 (default 0.0)"
+                            ),
+                        },
+                    },
+                    "required": ["query"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "memory_get",
+                "description": (
+                    "Read a specific memory file with "
+                    "optional line range. Use after "
+                    "memory_search to get full context "
+                    "around a snippet."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": (
+                                "Relative path to memory file "
+                                "(e.g. 'MEMORY.md' or "
+                                "'memory/2026-03-04.md')"
+                            ),
+                        },
+                        "from_line": {
+                            "type": "integer",
+                            "description": ("Start line (1-indexed, optional)"),
+                        },
+                        "num_lines": {
+                            "type": "integer",
+                            "description": ("Number of lines to read (optional)"),
+                        },
+                    },
+                    "required": ["path"],
                 },
             },
         },
@@ -578,11 +655,13 @@ class ToolExecutor:
         skills_manager: SkillsManager,
         sandbox: Sandbox = None,
         subagent_manager=None,
+        memory_search_manager=None,
     ):
         """Initialize tool executor with skills manager and sandbox."""
         self.skills_manager = skills_manager
         self.sandbox = sandbox or Sandbox()
         self.subagent_manager = subagent_manager
+        self.memory_search_manager = memory_search_manager
 
     async def execute_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool call and return the result."""
@@ -613,6 +692,10 @@ class ToolExecutor:
                 return await self._web_fetch(**arguments)
             elif function_name == "update_memory":
                 return await self._update_memory(**arguments)
+            elif function_name == "memory_search":
+                return await self._memory_search(**arguments)
+            elif function_name == "memory_get":
+                return await self._memory_get(**arguments)
             elif function_name == "read_skill":
                 return await self._read_skill(**arguments)
             elif function_name == "add_cron_job":
@@ -1035,20 +1118,104 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _update_memory(self, content: str) -> dict[str, Any]:
+    async def _update_memory(
+        self, content: str, target: str = "daily"
+    ) -> dict[str, Any]:
         """Append content to persistent memory."""
         try:
             from .memory import Memory
 
             memory = Memory()
-            memory.append(content)
+            if target == "long_term":
+                memory.append(content)
+                dest = "MEMORY.md"
+            else:
+                memory.append_daily(content)
+                dest = "daily log"
+            # Trigger re-sync of search index
+            if self.memory_search_manager is not None:
+                try:
+                    self.memory_search_manager.sync()
+                except Exception:
+                    pass  # Don't fail the write if sync fails
             return {
                 "message": (
-                    f"Added to memory: {content[:100]}"
+                    f"Added to {dest}: {content[:100]}"
                     f"{'...' if len(content) > 100 else ''}"
                 ),
                 "success": True,
             }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _memory_search(
+        self,
+        query: str,
+        max_results: int = 5,
+        min_score: float = 0.0,
+    ) -> dict[str, Any]:
+        """Semantically search memory files."""
+        if self.memory_search_manager is None:
+            return {
+                "error": ("Memory search unavailable, no embedding API key configured"),
+                "success": False,
+            }
+        if not self.memory_search_manager.available:
+            return {
+                "error": ("Memory search unavailable, no embedding API key configured"),
+                "success": False,
+            }
+        try:
+            results = self.memory_search_manager.search(
+                query, max_results=max_results, min_score=min_score
+            )
+            return {
+                "results": [
+                    {
+                        "path": r.path,
+                        "start_line": r.start_line,
+                        "end_line": r.end_line,
+                        "score": r.score,
+                        "snippet": r.snippet,
+                    }
+                    for r in results
+                ],
+                "count": len(results),
+                "success": True,
+            }
+        except Exception as e:
+            return {"error": str(e), "success": False}
+
+    async def _memory_get(
+        self,
+        path: str,
+        from_line: int | None = None,
+        num_lines: int | None = None,
+    ) -> dict[str, Any]:
+        """Read a specific memory file with optional line range."""
+        # Security: only allow MEMORY.md and memory/*.md
+        import re as _re
+
+        allowed = _re.match(r"^(MEMORY\.md|memory/[A-Za-z0-9_.-]+\.md)$", path)
+        if not allowed:
+            return {
+                "error": (
+                    "Access denied: only MEMORY.md and memory/*.md files are allowed"
+                ),
+                "success": False,
+            }
+        koi_dir = Path.cwd() / ".koi"
+        file_path = koi_dir / path
+        if not file_path.exists():
+            return {"text": "", "path": path, "success": True}
+        try:
+            text = file_path.read_text(encoding="utf-8")
+            if from_line is not None:
+                lines = text.split("\n")
+                start = max(0, from_line - 1)  # to 0-indexed
+                end = start + num_lines if num_lines else len(lines)
+                text = "\n".join(lines[start:end])
+            return {"text": text, "path": path, "success": True}
         except Exception as e:
             return {"error": str(e), "success": False}
 
