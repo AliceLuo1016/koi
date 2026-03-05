@@ -16,7 +16,6 @@ from koi.context_guard import (
     truncate_tool_result,
 )
 
-
 # --- estimate_message_chars ---
 
 
@@ -49,7 +48,8 @@ class TestEstimateMessageChars:
     def test_tool_message_weighted(self):
         content = "x" * 100
         msg = {"role": "tool", "content": content}
-        # Tool messages are weighted: raw_chars * (CHARS_PER_TOKEN / TOOL_RESULT_CHARS_PER_TOKEN)
+        # Tool messages are weighted:
+        #   raw_chars * (CHARS_PER_TOKEN / TOOL_RESULT_CHARS_PER_TOKEN)
         # 100 * (4 / 2) = 200
         expected = 100 * CHARS_PER_TOKEN // TOOL_RESULT_CHARS_PER_TOKEN
         assert estimate_message_chars(msg) == expected
@@ -81,7 +81,10 @@ class TestEstimateContextChars:
         user_chars = len("hi")
         assistant_chars = len("hello")
         tool_chars = len("data") * CHARS_PER_TOKEN // TOOL_RESULT_CHARS_PER_TOKEN
-        assert estimate_context_chars(messages) == user_chars + assistant_chars + tool_chars
+        assert (
+            estimate_context_chars(messages)
+            == user_chars + assistant_chars + tool_chars
+        )
 
     def test_empty_list(self):
         assert estimate_context_chars([]) == 0
@@ -148,9 +151,21 @@ class TestCompactOldestToolResults:
     def test_replaces_oldest_first(self):
         messages = [
             {"role": "user", "content": "hi"},
-            {"role": "tool", "content": "first tool output " * 100, "tool_call_id": "tc_1"},
-            {"role": "tool", "content": "second tool output " * 100, "tool_call_id": "tc_2"},
-            {"role": "tool", "content": "third tool output " * 100, "tool_call_id": "tc_3"},
+            {
+                "role": "tool",
+                "content": "first tool output " * 100,
+                "tool_call_id": "tc_1",
+            },
+            {
+                "role": "tool",
+                "content": "second tool output " * 100,
+                "tool_call_id": "tc_2",
+            },
+            {
+                "role": "tool",
+                "content": "third tool output " * 100,
+                "tool_call_id": "tc_3",
+            },
         ]
         # Request enough chars to compact the first tool result
         result = compact_oldest_tool_results(messages, 1)
@@ -204,7 +219,9 @@ class TestEnforceContextBudget:
         # context_window = 1000 tokens
         # max_single_tool_chars = 1000 * 2 * 0.5 = 1000 chars
         context_window = 1000
-        max_single = int(context_window * TOOL_RESULT_CHARS_PER_TOKEN * SINGLE_TOOL_RESULT_SHARE)
+        max_single = int(
+            context_window * TOOL_RESULT_CHARS_PER_TOKEN * SINGLE_TOOL_RESULT_SHARE
+        )
         oversized_content = "x" * (max_single * 3)
         messages = [
             {"role": "user", "content": "go"},
@@ -224,11 +241,13 @@ class TestEnforceContextBudget:
         # Total tool weighted = 100000, way over 30000 budget
         messages = [{"role": "user", "content": "go"}]
         for i in range(10):
-            messages.append({
-                "role": "tool",
-                "content": "d" * 5000,
-                "tool_call_id": f"tc_{i}",
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": "d" * 5000,
+                    "tool_call_id": f"tc_{i}",
+                }
+            )
         result = enforce_context_budget(messages, context_window)
         total = estimate_context_chars(result)
         assert total <= budget_chars
@@ -266,15 +285,19 @@ class TestEnforceContextBudget:
         # Total = 2 (user) + 30000 (tools) = 30002, over 15000 budget
         messages = [{"role": "user", "content": "go"}]
         for i in range(5):
-            messages.append({
-                "role": "tool",
-                "content": "z" * 3000,
-                "tool_call_id": f"tc_{i}",
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": "z" * 3000,
+                    "tool_call_id": f"tc_{i}",
+                }
+            )
         result = enforce_context_budget(messages, context_window)
         # At least some old tool results should be compacted
         compacted_count = sum(
-            1 for m in result if m.get("role") == "tool" and m["content"] == COMPACTION_PLACEHOLDER
+            1
+            for m in result
+            if m.get("role") == "tool" and m["content"] == COMPACTION_PLACEHOLDER
         )
         assert compacted_count > 0
         # Total should now be under budget
@@ -314,15 +337,15 @@ class TestSystemPromptPreservation:
         """System prompt is never compacted or truncated by context guard."""
         system_content = "You are koi. Follow all safety rules and tool guidance."
         context_window = 5000
-        budget_chars = int(context_window * CHARS_PER_TOKEN * CONTEXT_INPUT_HEADROOM)
-
         messages = [{"role": "system", "content": system_content}]
         for i in range(10):
-            messages.append({
-                "role": "tool",
-                "content": "z" * 3000,
-                "tool_call_id": f"tc_{i}",
-            })
+            messages.append(
+                {
+                    "role": "tool",
+                    "content": "z" * 3000,
+                    "tool_call_id": f"tc_{i}",
+                }
+            )
 
         result = enforce_context_budget(messages, context_window)
 

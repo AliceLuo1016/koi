@@ -3,7 +3,6 @@
 import os
 import re
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 
 import yaml
 
@@ -31,12 +30,29 @@ class Sandbox:
         self.allowed_paths = [self._resolve(p) for p in fs.get("allowed_paths", ["."])]
         self.readonly_paths = [self._resolve(p) for p in fs.get("readonly_paths", [])]
         self.blocked_paths = [self._resolve(p) for p in fs.get("blocked_paths", [])]
-        
 
-        self.env_allowlist = set(env.get("allowlist", ["PATH", "HOME", "USER", "SHELL", "LANG", "TERM", "SSH_AUTH_SOCK", "SSH_AGENT_PID"]))
+        self.env_allowlist = set(
+            env.get(
+                "allowlist",
+                [
+                    "PATH",
+                    "HOME",
+                    "USER",
+                    "SHELL",
+                    "LANG",
+                    "TERM",
+                    "SSH_AUTH_SOCK",
+                    "SSH_AGENT_PID",
+                ],
+            )
+        )
 
-        self.blocked_patterns = [re.compile(p, re.IGNORECASE) for p in cmd.get("blocked_patterns", [])]
-        self.confirm_patterns = [re.compile(p, re.IGNORECASE) for p in cmd.get("confirm_patterns", [])]
+        self.blocked_patterns = [
+            re.compile(p, re.IGNORECASE) for p in cmd.get("blocked_patterns", [])
+        ]
+        self.confirm_patterns = [
+            re.compile(p, re.IGNORECASE) for p in cmd.get("confirm_patterns", [])
+        ]
 
     def _resolve(self, p: str) -> Path:
         """Resolve a path, expanding ~ and making relative paths project-relative."""
@@ -47,12 +63,12 @@ class Sandbox:
 
     # ── File access checks ──
 
-    def check_read(self, path: str) -> Tuple[bool, Optional[str]]:
+    def check_read(self, path: str) -> tuple[bool, str | None]:
         """Check if reading a path is allowed. Returns (allowed, reason)."""
         resolved = self._resolve_file_path(path)
         return self._check_file_access(resolved, write=False)
 
-    def check_write(self, path: str) -> Tuple[bool, Optional[str]]:
+    def check_write(self, path: str) -> tuple[bool, str | None]:
         """Check if writing to a path is allowed. Returns (allowed, reason)."""
         resolved = self._resolve_file_path(path)
         return self._check_file_access(resolved, write=True)
@@ -63,7 +79,9 @@ class Sandbox:
             return p.resolve()
         return (self.project_root / p).resolve()
 
-    def _check_file_access(self, resolved: Path, write: bool) -> Tuple[bool, Optional[str]]:
+    def _check_file_access(
+        self, resolved: Path, write: bool
+    ) -> tuple[bool, str | None]:
         # Blocked paths always win
         for blocked in self.blocked_paths:
             try:
@@ -94,14 +112,14 @@ class Sandbox:
 
     # ── Environment sandboxing ──
 
-    def get_safe_env(self) -> Dict[str, str]:
+    def get_safe_env(self) -> dict[str, str]:
         """Return a sanitized copy of os.environ with only allowlisted vars."""
         env = {k: v for k, v in os.environ.items() if k in self.env_allowlist}
         return env
 
     # ── Command checks ──
 
-    def check_command(self, command: str) -> Tuple[bool, Optional[str], bool]:
+    def check_command(self, command: str) -> tuple[bool, str | None, bool]:
         """
         Check a shell command.
         Returns (allowed, reason, needs_confirm).

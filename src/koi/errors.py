@@ -2,17 +2,24 @@
 
 import json
 import re
-from typing import Optional
 
 
 class KoiError(Exception):
     """Base error for all Koi errors."""
+
     pass
 
 
 class KoiAPIError(KoiError):
     """Base for API errors. Stores status_code, error_text, retryable flag."""
-    def __init__(self, message: str, status_code: int = 0, error_text: str = "", retryable: bool = False):
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 0,
+        error_text: str = "",
+        retryable: bool = False,
+    ):
         super().__init__(message)
         self.status_code = status_code
         self.error_text = error_text
@@ -21,43 +28,56 @@ class KoiAPIError(KoiError):
 
 class KoiRateLimitError(KoiAPIError):
     """429 or rate limit detected in body."""
-    def __init__(self, message: str, status_code: int = 429, error_text: str = "", retry_after: Optional[float] = None):
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int = 429,
+        error_text: str = "",
+        retry_after: float | None = None,
+    ):
         super().__init__(message, status_code, error_text, retryable=True)
         self.retry_after = retry_after
 
 
 class KoiAuthError(KoiAPIError):
     """401, 403 — not retryable."""
+
     def __init__(self, message: str, status_code: int = 401, error_text: str = ""):
         super().__init__(message, status_code, error_text, retryable=False)
 
 
 class KoiBillingError(KoiAPIError):
     """402 or payment-related — not retryable."""
+
     def __init__(self, message: str, status_code: int = 402, error_text: str = ""):
         super().__init__(message, status_code, error_text, retryable=False)
 
 
 class KoiOverloadedError(KoiAPIError):
     """529 or 'overloaded' in body — retryable."""
+
     def __init__(self, message: str, status_code: int = 529, error_text: str = ""):
         super().__init__(message, status_code, error_text, retryable=True)
 
 
 class KoiServerError(KoiAPIError):
     """500, 502, 503, 504 — retryable."""
+
     def __init__(self, message: str, status_code: int = 500, error_text: str = ""):
         super().__init__(message, status_code, error_text, retryable=True)
 
 
 class KoiContextOverflowError(KoiAPIError):
     """Context too long — not retryable (needs compaction)."""
+
     def __init__(self, message: str, status_code: int = 400, error_text: str = ""):
         super().__init__(message, status_code, error_text, retryable=False)
 
 
 class KoiConnectionError(KoiError):
     """Connection/timeout — retryable."""
+
     def __init__(self, message: str):
         super().__init__(message)
         self.retryable = True
@@ -67,7 +87,8 @@ class KoiConnectionError(KoiError):
 
 # Body text patterns indicating retryable errors (from pi-ai)
 _RETRYABLE_BODY_PATTERNS = re.compile(
-    r"resource.?exhausted|rate.?limit|overloaded|service.?unavailable|other.?side.?closed|"
+    r"resource.?exhausted|rate.?limit|overloaded|"
+    r"service.?unavailable|other.?side.?closed|"
     r"too many requests|capacity|throttl",
     re.IGNORECASE,
 )
@@ -100,56 +121,70 @@ CONTEXT_OVERFLOW_PATTERNS = re.compile(
 )
 
 
-def classify_http_error(status_code: int, error_text: str, retry_after: Optional[float] = None) -> KoiAPIError:
+def classify_http_error(
+    status_code: int, error_text: str, retry_after: float | None = None
+) -> KoiAPIError:
     """Classify an HTTP error into a typed KoiAPIError."""
 
     # Check body text for context overflow first (can come as 400)
     if CONTEXT_OVERFLOW_PATTERNS.search(error_text):
         return KoiContextOverflowError(
             f"Context too long: {_extract_message(error_text)}",
-            status_code=status_code, error_text=error_text,
+            status_code=status_code,
+            error_text=error_text,
         )
 
     # Status-code based classification
     if status_code == 401 or status_code == 403:
         return KoiAuthError(
             f"Authentication failed (HTTP {status_code})",
-            status_code=status_code, error_text=error_text,
+            status_code=status_code,
+            error_text=error_text,
         )
 
     if status_code == 402 or _BILLING_PATTERNS.search(error_text):
         return KoiBillingError(
             f"Billing issue (HTTP {status_code}): {_extract_message(error_text)}",
-            status_code=status_code, error_text=error_text,
+            status_code=status_code,
+            error_text=error_text,
         )
 
-    if status_code == 429 or (status_code < 500 and _RETRYABLE_BODY_PATTERNS.search(error_text)):
+    if status_code == 429 or (
+        status_code < 500 and _RETRYABLE_BODY_PATTERNS.search(error_text)
+    ):
         return KoiRateLimitError(
             f"Rate limited (HTTP {status_code})",
-            status_code=status_code, error_text=error_text,
+            status_code=status_code,
+            error_text=error_text,
             retry_after=retry_after,
         )
 
-    if status_code == 529 or (status_code >= 500 and "overloaded" in error_text.lower()):
+    if status_code == 529 or (
+        status_code >= 500 and "overloaded" in error_text.lower()
+    ):
         return KoiOverloadedError(
             f"Service overloaded (HTTP {status_code})",
-            status_code=status_code, error_text=error_text,
+            status_code=status_code,
+            error_text=error_text,
         )
 
     if status_code in (500, 502, 503, 504):
         return KoiServerError(
             f"Server error (HTTP {status_code})",
-            status_code=status_code, error_text=error_text,
+            status_code=status_code,
+            error_text=error_text,
         )
 
     # Default: non-retryable API error
     return KoiAPIError(
         f"API error (HTTP {status_code}): {_extract_message(error_text)}",
-        status_code=status_code, error_text=error_text, retryable=False,
+        status_code=status_code,
+        error_text=error_text,
+        retryable=False,
     )
 
 
-def extract_retry_delay(error_text: str, headers: dict = None) -> Optional[float]:
+def extract_retry_delay(error_text: str, headers: dict = None) -> float | None:
     """Extract retry delay in seconds from headers and/or error body.
 
     Checks (in order):
@@ -177,7 +212,9 @@ def extract_retry_delay(error_text: str, headers: dict = None) -> Optional[float
                 pass
 
     # Body: "reset after 39s" or "reset after 18h31m10s"
-    m = re.search(r"reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s", error_text, re.IGNORECASE)
+    m = re.search(
+        r"reset after (?:(\d+)h)?(?:(\d+)m)?(\d+(?:\.\d+)?)s", error_text, re.IGNORECASE
+    )
     if m:
         hours = int(m.group(1) or 0)
         minutes = int(m.group(2) or 0)

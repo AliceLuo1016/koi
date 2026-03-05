@@ -1,11 +1,10 @@
 """Token usage tracking and cost estimation."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict
-
+from typing import Any
 
 # Per 1M tokens pricing (approximate)
 _PRICING = {
@@ -100,13 +99,17 @@ class TokenUsage:
         if self.cache_read_tokens:
             lines.append(f"  Cache read:     {self.cache_read_tokens:,} tokens")
         if self.cache_creation_tokens:
-            lines.append(
-                f"  Cache creation: {self.cache_creation_tokens:,} tokens"
-            )
-        
+            lines.append(f"  Cache creation: {self.cache_creation_tokens:,} tokens")
+
         # Add cache hit ratio if applicable
         if self.cache_read_tokens > 0 or self.input_tokens > 0:
-            cache_hit_ratio = self.cache_read_tokens / (self.cache_read_tokens + self.input_tokens) * 100 if (self.cache_read_tokens + self.input_tokens) > 0 else 0
+            cache_hit_ratio = (
+                self.cache_read_tokens
+                / (self.cache_read_tokens + self.input_tokens)
+                * 100
+                if (self.cache_read_tokens + self.input_tokens) > 0
+                else 0
+            )
             lines.append(f"  Cache hit:    {cache_hit_ratio:.1f}%")
 
         cost = estimate_cost(
@@ -121,7 +124,7 @@ class TokenUsage:
 
         return "\n".join(lines)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
@@ -153,45 +156,47 @@ def log_usage(usage: TokenUsage, model: str, log_dir: Path) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-
 def get_usage_history(log_dir: Path, days: int = 7) -> str:
     """Parse usage-log.jsonl and return aggregated stats for the past N days."""
     log_path = log_dir / "usage-log.jsonl"
     if not log_path.exists():
         return "No usage history found."
-    
+
     from datetime import timedelta
+
     cutoff_date = datetime.now(timezone.utc) - timedelta(days=days)
-    
+
     total_sessions = 0
     total_input = 0
     total_output = 0
     total_cache_read = 0
     total_cache_creation = 0
     total_cost = 0.0
-    
+
     try:
-        with open(log_path, 'r') as f:
+        with open(log_path) as f:
             for line in f:
                 try:
                     entry = json.loads(line.strip())
-                    timestamp = datetime.fromisoformat(entry['timestamp'])
+                    timestamp = datetime.fromisoformat(entry["timestamp"])
                     if timestamp >= cutoff_date:
                         total_sessions += 1
-                        session_tokens = entry.get('session_tokens', {})
-                        total_input += session_tokens.get('input_tokens', 0)
-                        total_output += session_tokens.get('output_tokens', 0)
-                        total_cache_read += session_tokens.get('cache_read_tokens', 0)
-                        total_cache_creation += session_tokens.get('cache_creation_tokens', 0)
-                        total_cost += entry.get('estimated_cost', 0.0)
+                        session_tokens = entry.get("session_tokens", {})
+                        total_input += session_tokens.get("input_tokens", 0)
+                        total_output += session_tokens.get("output_tokens", 0)
+                        total_cache_read += session_tokens.get("cache_read_tokens", 0)
+                        total_cache_creation += session_tokens.get(
+                            "cache_creation_tokens", 0
+                        )
+                        total_cost += entry.get("estimated_cost", 0.0)
                 except (json.JSONDecodeError, KeyError, ValueError):
                     continue  # Skip malformed entries
     except Exception:
         return "Error reading usage history."
-    
+
     if total_sessions == 0:
         return f"No usage in the past {days} days."
-    
+
     lines = [
         f"Usage History (Past {days} Days):",
         f"  Sessions: {total_sessions}",
@@ -199,18 +204,22 @@ def get_usage_history(log_dir: Path, days: int = 7) -> str:
         f"  Output: {total_output:,} tokens",
         f"  Total:  {total_input + total_output:,} tokens",
     ]
-    
+
     if total_cache_read > 0:
         lines.append(f"  Cache read:     {total_cache_read:,} tokens")
     if total_cache_creation > 0:
         lines.append(f"  Cache creation: {total_cache_creation:,} tokens")
-    
+
     # Add cache hit ratio for history
     if total_cache_read > 0 or total_input > 0:
-        cache_hit_ratio = total_cache_read / (total_cache_read + total_input) * 100 if (total_cache_read + total_input) > 0 else 0
+        cache_hit_ratio = (
+            total_cache_read / (total_cache_read + total_input) * 100
+            if (total_cache_read + total_input) > 0
+            else 0
+        )
         lines.append(f"  Cache hit:    {cache_hit_ratio:.1f}%")
-    
+
     if total_cost > 0:
         lines.append(f"  Total cost: ${total_cost:.4f}")
-    
+
     return "\n".join(lines)

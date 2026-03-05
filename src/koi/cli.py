@@ -4,15 +4,19 @@ import asyncio
 import json
 import shutil
 from pathlib import Path
-from typing import Optional
 
 import click
 from rich.console import Console
-from rich.table import Table
 from rich.markdown import Markdown
+from rich.table import Table
 
 from .agent import Agent
-from .config import Config, create_default_config, load_claude_code_api_key, normalize_think_level
+from .config import (
+    Config,
+    create_default_config,
+    load_claude_code_api_key,
+    normalize_think_level,
+)
 from .cron import CronManager
 from .llm import LLMClient
 from .memory import Memory
@@ -24,7 +28,10 @@ console = Console()
 @click.group()
 @click.version_option()
 def main():
-    """Koi - Terminal-based AI agent with memory, tool calling, skills, and system cron."""
+    """Koi - Terminal-based AI agent.
+
+    Features: memory, tool calling, skills, and system cron.
+    """
     pass
 
 
@@ -55,8 +62,11 @@ MODEL_PRESETS = {
 
 
 def _gather_project_files(project_root: Path) -> str:
-    """Collect key project files for LLM workspace scan. Returns ~12K chars max."""
-    BUDGET = 12000
+    """Collect key project files for LLM workspace scan.
+
+    Returns ~12K chars max.
+    """
+    budget = 12000
     sections: list[str] = []
     used = 0
 
@@ -75,16 +85,24 @@ def _gather_project_files(project_root: Path) -> str:
 
     # Ordered list of candidate files to include
     candidates = [
-        "README.md", "README.rst", "README",
-        "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
+        "README.md",
+        "README.rst",
+        "README",
+        "pyproject.toml",
+        "setup.py",
+        "setup.cfg",
+        "requirements.txt",
         "package.json",
-        "Cargo.toml", "go.mod",
-        "Makefile", "makefile",
-        "docker-compose.yml", "Dockerfile",
+        "Cargo.toml",
+        "go.mod",
+        "Makefile",
+        "makefile",
+        "docker-compose.yml",
+        "Dockerfile",
     ]
 
     for name in candidates:
-        if used >= BUDGET:
+        if used >= budget:
             break
         path = project_root / name
         if not path.is_file():
@@ -102,10 +120,10 @@ def _gather_project_files(project_root: Path) -> str:
 
     # GitHub Actions workflows (first 2)
     workflows_dir = project_root / ".github" / "workflows"
-    if workflows_dir.is_dir() and used < BUDGET:
+    if workflows_dir.is_dir() and used < budget:
         wf_files = sorted(workflows_dir.glob("*.yml"))[:2]
         for wf in wf_files:
-            if used >= BUDGET:
+            if used >= budget:
                 break
             try:
                 content = wf.read_text(errors="replace")
@@ -164,7 +182,8 @@ Project files:
     llm = LLMClient(config)
     try:
         response = await llm.chat(messages)
-        return response["choices"][0]["message"].get("content", "").strip()
+        content = response["choices"][0]["message"]
+        return content.get("content", "").strip()
     finally:
         await llm.close()
 
@@ -173,7 +192,7 @@ Project files:
 @click.option(
     "--force",
     is_flag=True,
-    help="Recreate config/sandbox/AGENTS even if they already exist"
+    help="Recreate config/sandbox/AGENTS even if they already exist",
 )
 def init(force: bool):
     """Initialize or re-run setup for .koi directory."""
@@ -182,12 +201,15 @@ def init(force: bool):
 
     # Interactive setup (fall back to defaults if not a TTY)
     import sys
+
     interactive = sys.stdin.isatty()
 
     if interactive:
         console.print("\n🐠 Koi Agent Setup\n", style="bold blue")
         if existing:
-            console.print("Re-running setup (existing config/skills preserved unless --force).\n")
+            console.print(
+                "Re-running setup (existing config/skills preserved unless --force).\n"
+            )
 
         console.print("Select a model:")
         for key, preset in MODEL_PRESETS.items():
@@ -277,53 +299,65 @@ def init(force: bool):
         # Create agents file
         agents_path = koi_dir / "AGENTS.md"
         if not agents_path.exists() or force:
+            _agents_content = (  # noqa: E501
+                "# Project Instructions\n\n"
+                "You are **Koi** — a terminal-based AI agent "
+                "that lives in the user's project directory.\n\n"
+                "## Session Startup\n\n"
+                "Every session begins the same way — "
+                "before responding to the user:\n\n"
+                "1. Read `.koi/MEMORY.md` to recall what you "
+                "already know about this project.\n"
+                "2. Check `.koi/alerts/` for any pending alerts.\n"
+                "3. Then proceed with the user's request.\n\n"
+                "Do not ask permission. Do not skip this. "
+                "Your memory resets between sessions — "
+                "MEMORY.md is the only thing that survives.\n\n"
+                "## Core Behavior\n\n"
+                "- Learn from execution history to minimize "
+                "tool/command invocations and prefer the "
+                "shortest safe path to achieve the goal.\n"
+                "- When repeated steps or errors are observed, "
+                "update the relevant skill(s) or memory to "
+                "encode the more efficient path (e.g., avoid "
+                "failing paths, use known working commands, "
+                "consolidate commands where safe).\n"
+                "- If a faster workflow becomes the default, "
+                "apply it directly in future runs without "
+                "re-trying known failing actions.\n\n"
+                "## Memory Discipline\n\n"
+                "You have no memory between sessions. "
+                "Anything not written to MEMORY.md is "
+                "gone forever.\n\n"
+                "**Where to store learnings:**\n\n"
+                "- **Skill-specific** → Update the skill's "
+                "`SKILL.md` directly (loaded on-demand, "
+                "keeps MEMORY.md lean).\n"
+                "- **General** → Write to `MEMORY.md`: user "
+                "preferences, environment quirks, "
+                "project-wide patterns, cross-cutting "
+                "mistakes.\n\n"
+                "**Never write skill-specific learnings "
+                "to MEMORY.md.**\n\n"
+                "## Mistake Documentation\n\n"
+                "When something goes wrong:\n"
+                "- Skill-related → update that skill's "
+                "`SKILL.md`\n"
+                "- General → document in `MEMORY.md`\n\n"
+                "## Output & Alerts\n\n"
+                "- In interactive sessions, always output "
+                "results directly in the terminal. Do not "
+                "use `create_alert` — just print the answer.\n"
+                "- Only use `create_alert` when running as "
+                "a cron job (non-interactive).\n\n"
+                "## Skills\n\n"
+                "All skills live in `.koi/skills/`. Each "
+                "skill is a directory containing a "
+                "`SKILL.md` file. Use `read_skill` with "
+                "the directory name to load a skill.\n"
+            )
             with open(agents_path, "w") as f:
-                f.write("""# Project Instructions
-
-You are **Koi** — a terminal-based AI agent that lives in the user's project directory.
-
-## Session Startup
-
-Every session begins the same way — before responding to the user:
-
-1. Read `.koi/MEMORY.md` to recall what you already know about this project.
-2. Check `.koi/alerts/` for any pending alerts.
-3. Then proceed with the user's request.
-
-Do not ask permission. Do not skip this. Your memory resets between sessions — MEMORY.md is the only thing that survives.
-
-## Core Behavior
-
-- Learn from execution history to minimize tool/command invocations and prefer the shortest safe path to achieve the goal.
-- When repeated steps or errors are observed, update the relevant skill(s) or memory to encode the more efficient path (e.g., avoid failing paths, use known working commands, consolidate commands where safe).
-- If a faster workflow becomes the default, apply it directly in future runs without re-trying known failing actions.
-
-## Memory Discipline
-
-You have no memory between sessions. Anything not written to MEMORY.md is gone forever.
-
-**Where to store learnings:**
-
-- **Skill-specific** → Update the skill's `SKILL.md` directly (loaded on-demand, keeps MEMORY.md lean).
-- **General** → Write to `MEMORY.md`: user preferences, environment quirks, project-wide patterns, cross-cutting mistakes.
-
-**Never write skill-specific learnings to MEMORY.md.**
-
-## Mistake Documentation
-
-When something goes wrong:
-- Skill-related → update that skill's `SKILL.md`
-- General → document in `MEMORY.md`
-
-## Output & Alerts
-
-- In interactive sessions, always output results directly in the terminal. Do not use `create_alert` — just print the answer.
-- Only use `create_alert` when running as a cron job (non-interactive).
-
-## Skills
-
-All skills live in `.koi/skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.
-""")
+                f.write(_agents_content)
 
         # Create default sandbox config
         sandbox_path = koi_dir / "sandbox.yaml"
@@ -401,40 +435,54 @@ commands:
         # Ensure AGENTS.md exists
         agents_path = koi_dir / "AGENTS.md"
         if not agents_path.exists():
+            _agents_content = (
+                "# Project Instructions\n\n"
+                "You are **Koi** — a terminal-based AI "
+                "agent that lives in the user's "
+                "project directory.\n\n"
+                "## Session Startup\n\n"
+                "Every session begins the same way — "
+                "before responding to the user:\n\n"
+                "1. Read `.koi/MEMORY.md` to recall what "
+                "you already know about this project.\n"
+                "2. Check `.koi/alerts/` for any "
+                "pending alerts.\n"
+                "3. Then proceed with the user's "
+                "request.\n\n"
+                "Do not ask permission. Do not skip "
+                "this. Your memory resets between "
+                "sessions — MEMORY.md is the only "
+                "thing that survives.\n\n"
+                "## Core Behavior\n\n"
+                "- Learn from execution history to "
+                "minimize tool/command invocations and "
+                "prefer the shortest safe path to "
+                "achieve the goal.\n"
+                "- When repeated steps or errors are "
+                "observed, update the relevant skill(s) "
+                "or memory to encode the more "
+                "efficient path.\n"
+                "- If a faster workflow becomes the "
+                "default, apply it directly in future "
+                "runs without re-trying known "
+                "failing actions.\n\n"
+                "## Memory Discipline\n\n"
+                "You have no memory between sessions. "
+                "Anything not written to MEMORY.md is "
+                "gone forever.\n\n"
+                "**Where to store learnings:**\n\n"
+                "- **Skill-specific** → Update the "
+                "skill's `SKILL.md` directly.\n"
+                "- **General** → Write to "
+                "`MEMORY.md`.\n\n"
+                "## Skills\n\n"
+                "All skills live in `.koi/skills/`. "
+                "Each skill is a directory containing a "
+                "`SKILL.md` file. Use `read_skill` with "
+                "the directory name to load a skill.\n"
+            )
             with open(agents_path, "w") as f:
-                f.write("""# Project Instructions
-
-You are **Koi** — a terminal-based AI agent that lives in the user's project directory.
-
-## Session Startup
-
-Every session begins the same way — before responding to the user:
-
-1. Read `.koi/MEMORY.md` to recall what you already know about this project.
-2. Check `.koi/alerts/` for any pending alerts.
-3. Then proceed with the user's request.
-
-Do not ask permission. Do not skip this. Your memory resets between sessions — MEMORY.md is the only thing that survives.
-
-## Core Behavior
-
-- Learn from execution history to minimize tool/command invocations and prefer the shortest safe path to achieve the goal.
-- When repeated steps or errors are observed, update the relevant skill(s) or memory to encode the more efficient path.
-- If a faster workflow becomes the default, apply it directly in future runs without re-trying known failing actions.
-
-## Memory Discipline
-
-You have no memory between sessions. Anything not written to MEMORY.md is gone forever.
-
-**Where to store learnings:**
-
-- **Skill-specific** → Update the skill's `SKILL.md` directly.
-- **General** → Write to `MEMORY.md`.
-
-## Skills
-
-All skills live in `.koi/skills/`. Each skill is a directory containing a `SKILL.md` file. Use `read_skill` with the directory name to load a skill.
-""")
+                f.write(_agents_content)
 
         # Ensure sandbox.yaml exists
         sandbox_path = koi_dir / "sandbox.yaml"
@@ -483,7 +531,7 @@ commands:
         # Update config with new wizard selections
         config_path = koi_dir / "config.json"
         if config_path.exists():
-            with open(config_path, "r") as f:
+            with open(config_path) as f:
                 existing_cfg = json.load(f)
             existing_cfg["api_base"] = api_base
             existing_cfg["api_key"] = api_key
@@ -527,7 +575,8 @@ commands:
         if not memory_path.exists():
             memory_path.write_text(
                 f"## User\n\n- Name: {username or 'unknown'}\n\n"
-                "## Project\n\n- (Run `koi init` again after fixing API settings to auto-generate)\n"
+                "## Project\n\n- (Run `koi init` again after "
+                "fixing API settings to auto-generate)\n"
             )
 
     console.print(
@@ -538,12 +587,15 @@ commands:
 
 @main.command()
 def switch():
-    """Switch model/backend without resetting skills, memory, or project instructions."""
+    """Switch model/backend without resetting skills or memory."""
     koi_dir = Path.cwd() / ".koi"
     config_path = koi_dir / "config.json"
 
     if not config_path.exists():
-        console.print("❌ No .koi/config.json found. Run 'koi init' first.", style="red")
+        console.print(
+            "No .koi/config.json found. Run 'koi init' first.",
+            style="red",
+        )
         return
 
     console.print("\n🐠 Switch Backend\n", style="bold blue")
@@ -580,7 +632,7 @@ def switch():
         api_key = click.prompt("\nAPI Key")
 
     # Load existing config to preserve non-backend settings
-    with open(config_path, "r") as f:
+    with open(config_path) as f:
         existing = json.load(f)
 
     existing["api_base"] = api_base
@@ -597,17 +649,21 @@ def switch():
     # Quick connection test
     try:
         cfg = Config.load(config_path)
+
         async def _test():
             llm = LLMClient(cfg)
             try:
-                await llm.chat([
-                    {"role": "user", "content": "Say ok"},
-                ])
+                await llm.chat(
+                    [
+                        {"role": "user", "content": "Say ok"},
+                    ]
+                )
                 return True
             finally:
                 await llm.close()
 
         import asyncio
+
         asyncio.run(_test())
         console.print("✅ Connection verified", style="green")
     except Exception:
@@ -618,70 +674,69 @@ def switch():
 
 
 @main.command()
-@click.option(
-    "--task",
-    help="Run a specific task and exit (for cron jobs)"
-)
+@click.option("--task", help="Run a specific task and exit (for cron jobs)")
 @click.option(
     "--non-interactive",
     is_flag=True,
-    help="Run without interactive prompt (for cron jobs)"
+    help="Run without interactive prompt (for cron jobs)",
 )
 @click.option(
     "--thinking",
-    type=click.Choice(["off", "minimal", "low", "medium", "high"], case_sensitive=False),
+    type=click.Choice(
+        ["off", "minimal", "low", "medium", "high"],
+        case_sensitive=False,
+    ),
     default=None,
-    help="Set thinking/reasoning level (overrides config)"
+    help="Set thinking/reasoning level (overrides config)",
 )
 @click.option(
     "--result-file",
     default=None,
-    help="Write final response to this JSON file (for sub-agent mode)"
+    help="Write final response to this JSON file (for sub-agent mode)",
 )
 @click.option(
-    "--model",
-    "model_override",
-    default=None,
-    help="Override the model from config"
+    "--model", "model_override", default=None, help="Override the model from config"
 )
 @click.option(
     "--pipe",
     is_flag=True,
-    help="Run in pipe mode for persistent subagent sessions (JSON on stdin/stdout)"
+    help="Run in pipe mode for persistent subagent sessions (JSON on stdin/stdout)",
 )
 @click.option(
     "--debug",
     is_flag=True,
-    help="Enable debug transcript logging to .koi/transcript.jsonl"
+    help="Enable debug transcript logging to .koi/transcript.jsonl",
 )
 @click.option(
-    "--resume", "-r",
+    "--resume",
+    "-r",
     "resume_session",
     default=None,
     is_flag=False,
     flag_value="__latest__",
-    help="Resume a session. Without value: resume latest. With value: resume specific session ID or path."
+    help=(
+        "Resume a session. Without value: resume latest. "
+        "With value: resume specific session ID or path."
+    ),
 )
 @click.option(
     "--new",
     "force_new",
     is_flag=True,
-    help="Force a new session (default behavior, explicit flag)"
+    help="Force a new session (default behavior, explicit flag)",
 )
 @click.option(
-    "--no-session",
-    is_flag=True,
-    help="Ephemeral mode — don't save session to disk"
+    "--no-session", is_flag=True, help="Ephemeral mode — don't save session to disk"
 )
 def run(
-    task: Optional[str],
+    task: str | None,
     non_interactive: bool,
-    thinking: Optional[str],
-    result_file: Optional[str],
-    model_override: Optional[str],
+    thinking: str | None,
+    result_file: str | None,
+    model_override: str | None,
     pipe: bool,
     debug: bool,
-    resume_session: Optional[str],
+    resume_session: str | None,
     force_new: bool,
     no_session: bool,
 ):
@@ -704,6 +759,7 @@ def run(
             if resume_session == "__latest__":
                 # Resume latest session
                 from .session_manager import SessionManager
+
                 sm = SessionManager(Path.cwd() / ".koi")
                 latest = sm.get_latest_session()
                 if latest:
@@ -716,11 +772,15 @@ def run(
                 if not session_path.exists():
                     # Try finding by ID in sessions dir
                     sessions_dir = Path.cwd() / ".koi" / "sessions"
-                    matches = list(sessions_dir.glob(f"*{resume_session}*.jsonl"))
+                    pattern = f"*{resume_session}*.jsonl"
+                    matches = list(sessions_dir.glob(pattern))
                     if matches:
                         session_path = matches[0]
                     else:
-                        console.print(f"Session not found: {resume_session}", style="red")
+                        console.print(
+                            f"Session not found: {resume_session}",
+                            style="red",
+                        )
                         return
                 agent.resume_from_session(session_path)
 
@@ -729,16 +789,17 @@ def run(
             asyncio.run(agent.run_pipe_mode())
         elif task:
             # Run specific task and exit
-            asyncio.run(
-                _run_task(agent, task, non_interactive, result_file)
-            )
+            asyncio.run(_run_task(agent, task, non_interactive, result_file))
         else:
             # Interactive session
             asyncio.run(agent.run_interactive())
 
     except FileNotFoundError as e:
         if ".koi/config.json" in str(e):
-            console.print("❌ No .koi/config.json found. Run 'koi init' first.", style="red")
+            console.print(
+                "No .koi/config.json found. Run 'koi init' first.",
+                style="red",
+            )
         else:
             console.print(f"❌ File not found: {e}", style="red")
     except Exception as e:
@@ -749,7 +810,7 @@ async def _run_task(
     agent: "Agent",
     task: str,
     non_interactive: bool,
-    result_file: Optional[str],
+    result_file: str | None,
 ):
     """Run a task and optionally write the result to a JSON file."""
     await agent.run_task(task, non_interactive=non_interactive)
@@ -763,6 +824,7 @@ async def _run_task(
                 break
 
         import json as _json
+
         result = {
             "summary": response_text[:2000],
             "response": response_text,
@@ -803,27 +865,27 @@ def list_cron():
     try:
         cron_manager = CronManager()
         jobs = cron_manager.list_jobs()
-        
+
         if not jobs:
             console.print("No cron jobs registered.", style="yellow")
             return
-        
+
         table = Table(title="Registered Cron Jobs")
         table.add_column("ID", style="cyan", no_wrap=True)
         table.add_column("Schedule", style="magenta")
         table.add_column("Task", style="green")
         table.add_column("Status", style="blue")
-        
+
         for job in jobs:
             table.add_row(
                 job["id"],
                 job["schedule"],
                 job["task"],
-                "Active" if job.get("active", True) else "Inactive"
+                "Active" if job.get("active", True) else "Inactive",
             )
-        
+
         console.print(table)
-    
+
     except Exception as e:
         console.print(f"❌ Error listing cron jobs: {e}", style="red")
 
@@ -847,25 +909,29 @@ def skills():
         config = Config.load()
         skills_manager = SkillsManager(config.skills_paths)
         available_skills = skills_manager.list_skills()
-        
+
         if not available_skills:
             console.print("No skills found.", style="yellow")
             return
-        
+
         table = Table(title="Available Skills")
         table.add_column("Name", style="cyan", no_wrap=True)
         table.add_column("Description", style="green")
         table.add_column("Path", style="blue")
-        
+
         for skill in available_skills:
             table.add_row(
                 skill["name"],
-                skill["description"][:80] + "..." if len(skill["description"]) > 80 else skill["description"],
-                str(skill["path"])
+                (
+                    skill["description"][:80] + "..."
+                    if len(skill["description"]) > 80
+                    else skill["description"]
+                ),
+                str(skill["path"]),
             )
-        
+
         console.print(table)
-    
+
     except Exception as e:
         console.print(f"❌ Error listing skills: {e}", style="red")
 
@@ -875,18 +941,20 @@ def config():
     """Show current configuration."""
     try:
         config = Config.load()
-        
+
         table = Table(title="Current Configuration")
         table.add_column("Setting", style="cyan", no_wrap=True)
         table.add_column("Value", style="green")
-        
+
         # Hide API key for security
         api_key = config.api_key
         if api_key:
-            masked_key = api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            masked_key = (
+                api_key[:8] + "..." + api_key[-4:] if len(api_key) > 12 else "***"
+            )
         else:
             masked_key = "Not set"
-        
+
         table.add_row("API Base", config.api_base)
         table.add_row("API Key", masked_key)
         table.add_row("API Format", config.api_format)
@@ -898,15 +966,28 @@ def config():
         table.add_row("Thinking Level", config.thinking_level)
 
         console.print(table)
-    
+
     except Exception as e:
         console.print(f"❌ Error loading config: {e}", style="red")
 
 
 @main.command()
-@click.option("--host", default=None, help="Server host (default: from config or 0.0.0.0)")
-@click.option("--port", default=None, type=int, help="Server port (default: from config or 8080)")
-@click.option("--channel", default=None, help="Start only this channel (e.g. 'slack')")
+@click.option(
+    "--host",
+    default=None,
+    help="Server host (default: from config or 0.0.0.0)",
+)
+@click.option(
+    "--port",
+    default=None,
+    type=int,
+    help="Server port (default: from config or 8080)",
+)
+@click.option(
+    "--channel",
+    default=None,
+    help="Start only this channel (e.g. 'slack')",
+)
 def serve(host, port, channel):
     """Start the Koi server with webhook/channel integrations."""
     try:
@@ -922,7 +1003,10 @@ def serve(host, port, channel):
     try:
         config = Config.load()
     except FileNotFoundError:
-        console.print("❌ No .koi/config.json found. Run 'koi init' first.", style="red")
+        console.print(
+            "No .koi/config.json found. Run 'koi init' first.",
+            style="red",
+        )
         return
 
     _host = host or config.server_host
@@ -958,7 +1042,10 @@ def serve(host, port, channel):
         channels.append(slack_channel)
 
     if channel and not channels:
-        console.print(f"❌ Channel '{channel}' is not enabled or not configured.", style="red")
+        console.print(
+            f"Channel '{channel}' is not enabled or configured.",
+            style="red",
+        )
         return
 
     server = KoiServer(config, channels=channels)
@@ -968,7 +1055,10 @@ def serve(host, port, channel):
         for ch in channels:
             console.print(f"  ✅ Channel: {type(ch).__name__}", style="green")
     else:
-        console.print("  ⚠️  No channels enabled (health check only)", style="yellow")
+        console.print(
+            "  No channels enabled (health check only)",
+            style="yellow",
+        )
 
     server.run(host=_host, port=_port)
 
@@ -979,14 +1069,14 @@ def memory():
     try:
         memory = Memory()
         content = memory.load()
-        
+
         if not content.strip():
             console.print("Memory is empty.", style="yellow")
             return
-        
+
         console.print("[bold blue]Current Memory:[/bold blue]")
         console.print(Markdown(content))
-    
+
     except Exception as e:
         console.print(f"❌ Error loading memory: {e}", style="red")
 

@@ -2,31 +2,21 @@
 
 import asyncio
 import copy
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-import pytest
-
+from koi.compaction import ContextCompactor, compact_with_timeout
 from koi.context_pruning import (
-    CHARS_PER_TOKEN,
     HARD_CLEAR_PLACEHOLDER,
-    HARD_CLEAR_RATIO,
-    KEEP_LAST_ASSISTANTS,
-    MIN_PRUNABLE_CHARS,
     PRUNABLE_TOOLS,
-    SOFT_TRIM_HEAD_CHARS,
-    SOFT_TRIM_MAX_CHARS,
-    SOFT_TRIM_RATIO,
-    SOFT_TRIM_TAIL_CHARS,
     estimate_context_chars,
     estimate_message_chars,
     prune_context,
 )
-from koi.compaction import COMPACTION_TIMEOUT, ContextCompactor, compact_with_timeout
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_tool_call(tool_id: str, name: str, arguments: str = "{}"):
     return {
@@ -77,6 +67,7 @@ def _make_conversation_with_tool_results(
 # estimate_message_chars
 # ---------------------------------------------------------------------------
 
+
 class TestEstimateMessageChars:
     def test_user_message(self):
         msg = _user_msg("hello world")
@@ -113,11 +104,12 @@ class TestEstimateMessageChars:
 # estimate_context_chars
 # ---------------------------------------------------------------------------
 
+
 class TestEstimateContextChars:
     def test_full_conversation(self):
         msgs = [
-            _user_msg("hello"),       # 5
-            _assistant_msg("world"),   # 5
+            _user_msg("hello"),  # 5
+            _assistant_msg("world"),  # 5
         ]
         assert estimate_context_chars(msgs) == 5 + 5
 
@@ -128,6 +120,7 @@ class TestEstimateContextChars:
 # ---------------------------------------------------------------------------
 # prune_context — soft trim
 # ---------------------------------------------------------------------------
+
 
 class TestSoftTrim:
     def test_old_tool_results_trimmed_above_soft_ratio(self):
@@ -211,6 +204,7 @@ class TestSoftTrim:
 # prune_context — hard clear
 # ---------------------------------------------------------------------------
 
+
 class TestHardClear:
     def test_old_tool_results_cleared_above_hard_ratio(self):
         """Old tool results replaced with placeholder when ratio > 0.5."""
@@ -220,7 +214,9 @@ class TestHardClear:
         ]
         for i in range(20):
             tc_id = f"tc_{i}"
-            msgs.append(_assistant_with_tool_calls([_make_tool_call(tc_id, "exec_command")]))
+            msgs.append(
+                _assistant_with_tool_calls([_make_tool_call(tc_id, "exec_command")])
+            )
             msgs.append(_tool_result(tc_id, big_content))
 
         # Protected tail
@@ -261,6 +257,7 @@ class TestHardClear:
 # ---------------------------------------------------------------------------
 # prune_context — protections
 # ---------------------------------------------------------------------------
+
 
 class TestProtections:
     def test_messages_before_first_user_not_pruned(self):
@@ -307,6 +304,7 @@ class TestProtections:
 # prune_context — no-op cases
 # ---------------------------------------------------------------------------
 
+
 class TestNoOp:
     def test_small_context_no_pruning(self):
         """No pruning when context is below SOFT_TRIM_RATIO."""
@@ -348,6 +346,7 @@ class TestNoOp:
 # Compaction threshold
 # ---------------------------------------------------------------------------
 
+
 class TestCompactionThreshold:
     def test_threshold_is_0_6(self):
         """Compaction threshold should be 60% of context window."""
@@ -371,9 +370,11 @@ class TestCompactionThreshold:
 # Compaction timeout
 # ---------------------------------------------------------------------------
 
+
 class TestCompactionTimeout:
     async def test_timeout_returns_fallback(self):
         """compact_with_timeout should return fallback on timeout."""
+
         async def slow_compaction():
             await asyncio.sleep(10)
             return "should not reach"
@@ -383,6 +384,7 @@ class TestCompactionTimeout:
 
     async def test_normal_completion(self):
         """compact_with_timeout should return normally when fast enough."""
+
         async def fast_compaction():
             return "summary text"
 
@@ -409,23 +411,32 @@ class TestCompactionTimeout:
         ]
 
         with patch("koi.compaction.COMPACTION_TIMEOUT", 0.1):
-            from koi.compaction import compact_with_timeout as cwt
-
             result = await compactor.compact_messages(msgs)
 
         # Summary (possibly timed-out) should be at index 0
         assert len(result) > 0
         summary_msg = result[0]
-        assert "timed out" in summary_msg["content"].lower() or "summary" in summary_msg["content"].lower()
+        assert (
+            "timed out" in summary_msg["content"].lower()
+            or "summary" in summary_msg["content"].lower()
+        )
 
 
 # ---------------------------------------------------------------------------
 # Integration: prunable tools set
 # ---------------------------------------------------------------------------
 
+
 class TestPrunableTools:
     def test_all_expected_tools_prunable(self):
-        expected = {"read_file", "exec_command", "web_fetch", "web_search", "glob_files", "grep_files"}
+        expected = {
+            "read_file",
+            "exec_command",
+            "web_fetch",
+            "web_search",
+            "glob_files",
+            "grep_files",
+        }
         assert PRUNABLE_TOOLS == expected
 
     def test_read_skill_not_prunable(self):

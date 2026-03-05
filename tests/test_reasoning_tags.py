@@ -1,12 +1,9 @@
 """Tests for non-native reasoning tag support (<think>/<final> tags)."""
 
-import pytest
-
-from koi.config import Config
-from koi.llm import LLMClient, supports_thinking, uses_reasoning_tags
-from koi.prompts import build_system_prompt
 from koi.agent import strip_thinking_tags
-
+from koi.config import Config
+from koi.llm import LLMClient, uses_reasoning_tags
+from koi.prompts import build_system_prompt
 
 # ── uses_reasoning_tags() ──
 

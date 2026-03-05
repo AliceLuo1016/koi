@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any
 
 ACP_AVAILABLE = False
 try:
@@ -14,27 +14,25 @@ try:
     from acp.schema import (
         AgentMessageChunk,
         AgentThoughtChunk,
-        ToolCallStart,
-        ToolCallProgress,
-        AgentPlanUpdate,
-        UsageUpdate,
-        TextContentBlock,
-        ClientCapabilities,
-        Implementation,
-        RequestPermissionResponse,
-        PermissionOption,
         AllowedOutcome,
-        DeniedOutcome,
-        ToolCallUpdate,
-        ReadTextFileResponse,
-        WriteTextFileResponse,
+        ClientCapabilities,
         CreateTerminalResponse,
-        ReleaseTerminalResponse,
-        TerminalOutputResponse,
-        WaitForTerminalExitResponse,
-        KillTerminalCommandResponse,
+        DeniedOutcome,
         FileSystemCapability,
+        Implementation,
+        KillTerminalCommandResponse,
+        ReadTextFileResponse,
+        ReleaseTerminalResponse,
+        RequestPermissionResponse,
+        TerminalOutputResponse,
+        TextContentBlock,
+        ToolCallProgress,
+        ToolCallStart,
+        UsageUpdate,
+        WaitForTerminalExitResponse,
+        WriteTextFileResponse,
     )
+
     ACP_AVAILABLE = True
 except ImportError:
     pass
@@ -46,21 +44,22 @@ class ACPResult:
 
     content: str
     stop_reason: str = "end_turn"
-    tool_calls: List[dict] = field(default_factory=list)
+    tool_calls: list[dict] = field(default_factory=list)
     thoughts: str = ""
-    usage: Optional[dict] = None
+    usage: dict | None = None
 
 
 class KoiACPClient:
-    """ACP Client implementation that auto-approves permissions and collects responses."""
+    """ACP Client implementation that auto-approves permissions
+    and collects responses."""
 
-    def __init__(self, auto_approve: bool = True, cwd: Optional[str] = None):
+    def __init__(self, auto_approve: bool = True, cwd: str | None = None):
         self.auto_approve = auto_approve
         self.cwd = cwd or os.getcwd()
         self._collected_text = ""
         self._collected_thoughts = ""
-        self._tool_calls: List[dict] = []
-        self._usage: Optional[dict] = None
+        self._tool_calls: list[dict] = []
+        self._usage: dict | None = None
         self._text_event = asyncio.Event()
 
     def reset(self):
@@ -81,8 +80,19 @@ class KoiACPClient:
     ) -> RequestPermissionResponse:
         """Handle permission requests from the agent."""
         if self.auto_approve and options:
-            option_id = options[0].id if hasattr(options[0], 'id') else options[0].option_id if hasattr(options[0], 'option_id') else "allow"
-            return RequestPermissionResponse(outcome=AllowedOutcome(outcome="selected", option_id=option_id))
+            opt = options[0]
+            if hasattr(opt, "id"):
+                option_id = opt.id
+            elif hasattr(opt, "option_id"):
+                option_id = opt.option_id
+            else:
+                option_id = "allow"
+            return RequestPermissionResponse(
+                outcome=AllowedOutcome(
+                    outcome="selected",
+                    option_id=option_id,
+                )
+            )
         return RequestPermissionResponse(outcome=DeniedOutcome(outcome="cancelled"))
 
     async def session_update(
@@ -93,25 +103,25 @@ class KoiACPClient:
     ) -> None:
         """Handle session updates (streamed text, tool calls, etc.)."""
         if isinstance(update, AgentMessageChunk):
-            if hasattr(update, 'content') and update.content:
+            if hasattr(update, "content") and update.content:
                 content = update.content
-                if hasattr(content, 'text'):
+                if hasattr(content, "text"):
                     self._collected_text += content.text
         elif isinstance(update, AgentThoughtChunk):
-            if hasattr(update, 'content') and update.content:
+            if hasattr(update, "content") and update.content:
                 content = update.content
-                if hasattr(content, 'text'):
+                if hasattr(content, "text"):
                     self._collected_thoughts += content.text
-        elif isinstance(update, (ToolCallStart, ToolCallProgress)):
+        elif isinstance(update, ToolCallStart | ToolCallProgress):
             tool_info = {
                 "type": type(update).__name__,
-                "tool_call_id": getattr(update, 'tool_call_id', ''),
-                "title": getattr(update, 'title', ''),
-                "status": getattr(update, 'status', ''),
+                "tool_call_id": getattr(update, "tool_call_id", ""),
+                "title": getattr(update, "title", ""),
+                "status": getattr(update, "status", ""),
             }
             self._tool_calls.append(tool_info)
         elif isinstance(update, UsageUpdate):
-            if hasattr(update, 'usage'):
+            if hasattr(update, "usage"):
                 self._usage = update.usage if isinstance(update.usage, dict) else {}
 
     async def read_text_file(
@@ -119,7 +129,7 @@ class KoiACPClient:
     ) -> ReadTextFileResponse:
         """Allow agent to read files."""
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(path, encoding="utf-8") as f:
                 content = f.read()
             return ReadTextFileResponse(content=content)
         except Exception as e:
@@ -133,22 +143,32 @@ class KoiACPClient:
             with open(path, "w", encoding="utf-8") as f:
                 f.write(content)
             return WriteTextFileResponse()
-        except Exception as e:
+        except Exception:
             return WriteTextFileResponse()
 
-    async def create_terminal(self, command: str, session_id: str, **kwargs: Any) -> CreateTerminalResponse:
+    async def create_terminal(
+        self, command: str, session_id: str, **kwargs: Any
+    ) -> CreateTerminalResponse:
         return CreateTerminalResponse(terminal_id="unsupported")
 
-    async def terminal_output(self, session_id: str, terminal_id: str, **kwargs: Any) -> TerminalOutputResponse:
+    async def terminal_output(
+        self, session_id: str, terminal_id: str, **kwargs: Any
+    ) -> TerminalOutputResponse:
         return TerminalOutputResponse(output="", truncated=False)
 
-    async def release_terminal(self, session_id: str, terminal_id: str, **kwargs: Any) -> ReleaseTerminalResponse:
+    async def release_terminal(
+        self, session_id: str, terminal_id: str, **kwargs: Any
+    ) -> ReleaseTerminalResponse:
         return ReleaseTerminalResponse()
 
-    async def wait_for_terminal_exit(self, session_id: str, terminal_id: str, **kwargs: Any) -> WaitForTerminalExitResponse:
+    async def wait_for_terminal_exit(
+        self, session_id: str, terminal_id: str, **kwargs: Any
+    ) -> WaitForTerminalExitResponse:
         return WaitForTerminalExitResponse(exit_code=1)
 
-    async def kill_terminal_command(self, session_id: str, terminal_id: str, **kwargs: Any) -> KillTerminalCommandResponse:
+    async def kill_terminal_command(
+        self, session_id: str, terminal_id: str, **kwargs: Any
+    ) -> KillTerminalCommandResponse:
         return KillTerminalCommandResponse()
 
 
@@ -157,19 +177,19 @@ class ACPSession:
 
     def __init__(
         self,
-        command: List[str],
-        cwd: Optional[str] = None,
+        command: list[str],
+        cwd: str | None = None,
         auto_approve: bool = True,
-        env: Optional[Dict[str, str]] = None,
+        env: dict[str, str] | None = None,
     ):
         self.command = command
         self.cwd = cwd or os.getcwd()
         self.auto_approve = auto_approve
         self.env = env
-        self.session_id: Optional[str] = None
-        self._conn: Optional[ClientSideConnection] = None
-        self._process: Optional[asyncio.subprocess.Process] = None
-        self._client: Optional[KoiACPClient] = None
+        self.session_id: str | None = None
+        self._conn: ClientSideConnection | None = None
+        self._process: asyncio.subprocess.Process | None = None
+        self._client: KoiACPClient | None = None
         self._ctx = None
 
     async def start(self) -> str:
@@ -195,7 +215,7 @@ class ACPSession:
         self._conn, self._process = await self._ctx.__aenter__()
 
         # Initialize
-        init_resp = await self._conn.initialize(
+        await self._conn.initialize(
             protocol_version=acp.PROTOCOL_VERSION,
             client_capabilities=ClientCapabilities(
                 fs=FileSystemCapability(
@@ -234,7 +254,9 @@ class ACPSession:
 
         return ACPResult(
             content=self._client._collected_text,
-            stop_reason=resp.stop_reason if hasattr(resp, 'stop_reason') else "end_turn",
+            stop_reason=(
+                resp.stop_reason if hasattr(resp, "stop_reason") else "end_turn"
+            ),
             tool_calls=self._client._tool_calls,
             thoughts=self._client._collected_thoughts,
             usage=self._client._usage,

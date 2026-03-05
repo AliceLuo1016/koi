@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import Mock, patch
+from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import yaml
 
@@ -565,8 +565,7 @@ async def test_tool_executor_resolve_alert_returns_fix_command():
             alerts_dir = Path(temp_dir) / ".koi" / "alerts"
             alerts_dir.mkdir(parents=True)
             (alerts_dir / "fix_alert.md").write_text(
-                "# DB Full\n- **Status:** pending\n"
-                "- **Fix Command:** `vacuum db`\n"
+                "# DB Full\n- **Status:** pending\n- **Fix Command:** `vacuum db`\n"
             )
             executor = ToolExecutor(Mock())
             tool_call = {
@@ -811,7 +810,6 @@ async def test_tool_executor_web_fetch_html_parsing():
 async def test_tool_executor_web_fetch_http_error():
     """web_fetch returns error on HTTP failure."""
     import unittest.mock as mock
-    import httpx
 
     executor = ToolExecutor(Mock())
 
@@ -866,11 +864,13 @@ async def test_tool_executor_edit_file_long_text_uses_summary_diff():
         tool_call = {
             "function": {
                 "name": "edit_file",
-                "arguments": json.dumps({
-                    "path": str(test_file),
-                    "old_text": old_text,
-                    "new_text": new_text,
-                }),
+                "arguments": json.dumps(
+                    {
+                        "path": str(test_file),
+                        "old_text": old_text,
+                        "new_text": new_text,
+                    }
+                ),
             }
         }
         result = await executor.execute_tool(tool_call)
@@ -901,12 +901,14 @@ async def test_tool_executor_add_cron_job_success():
     """add_cron_job tool returns job_id from CronManager."""
     executor = ToolExecutor(Mock())
 
-    with patch("koi.cron.CronManager") as MockCron:
-        MockCron.return_value.add_job.return_value = "abc-123"
+    with patch("koi.cron.CronManager") as mock_cron:
+        mock_cron.return_value.add_job.return_value = "abc-123"
         tool_call = {
             "function": {
                 "name": "add_cron_job",
-                "arguments": json.dumps({"schedule": "0 * * * *", "task": "run checks"}),
+                "arguments": json.dumps(
+                    {"schedule": "0 * * * *", "task": "run checks"}
+                ),
             }
         }
         result = await executor.execute_tool(tool_call)
@@ -920,8 +922,8 @@ async def test_tool_executor_add_cron_job_error():
     """add_cron_job returns error when CronManager.add_job raises."""
     executor = ToolExecutor(Mock())
 
-    with patch("koi.cron.CronManager") as MockCron:
-        MockCron.return_value.add_job.side_effect = RuntimeError("cron failed")
+    with patch("koi.cron.CronManager") as mock_cron:
+        mock_cron.return_value.add_job.side_effect = RuntimeError("cron failed")
         tool_call = {
             "function": {
                 "name": "add_cron_job",
@@ -938,8 +940,8 @@ async def test_tool_executor_list_cron_jobs_success():
     """list_cron_jobs returns job list and count."""
     executor = ToolExecutor(Mock())
 
-    with patch("koi.cron.CronManager") as MockCron:
-        MockCron.return_value.list_jobs.return_value = [
+    with patch("koi.cron.CronManager") as mock_cron:
+        mock_cron.return_value.list_jobs.return_value = [
             {"id": "j1", "schedule": "0 * * * *", "task": "do stuff"}
         ]
         tool_call = {
@@ -959,8 +961,8 @@ async def test_tool_executor_list_cron_jobs_empty():
     """list_cron_jobs returns empty list when no jobs exist."""
     executor = ToolExecutor(Mock())
 
-    with patch("koi.cron.CronManager") as MockCron:
-        MockCron.return_value.list_jobs.return_value = []
+    with patch("koi.cron.CronManager") as mock_cron:
+        mock_cron.return_value.list_jobs.return_value = []
         tool_call = {
             "function": {
                 "name": "list_cron_jobs",
@@ -977,8 +979,8 @@ async def test_tool_executor_list_cron_jobs_error():
     """list_cron_jobs returns error when CronManager raises."""
     executor = ToolExecutor(Mock())
 
-    with patch("koi.cron.CronManager") as MockCron:
-        MockCron.return_value.list_jobs.side_effect = RuntimeError("no cron")
+    with patch("koi.cron.CronManager") as mock_cron:
+        mock_cron.return_value.list_jobs.side_effect = RuntimeError("no cron")
         tool_call = {
             "function": {
                 "name": "list_cron_jobs",
@@ -995,8 +997,8 @@ async def test_tool_executor_remove_cron_job_success():
     """remove_cron_job removes a job and returns success message."""
     executor = ToolExecutor(Mock())
 
-    with patch("koi.cron.CronManager") as MockCron:
-        MockCron.return_value.remove_job.return_value = None
+    with patch("koi.cron.CronManager") as mock_cron:
+        mock_cron.return_value.remove_job.return_value = None
         tool_call = {
             "function": {
                 "name": "remove_cron_job",
@@ -1013,8 +1015,8 @@ async def test_tool_executor_remove_cron_job_error():
     """remove_cron_job returns error when CronManager raises."""
     executor = ToolExecutor(Mock())
 
-    with patch("koi.cron.CronManager") as MockCron:
-        MockCron.return_value.remove_job.side_effect = KeyError("job not found")
+    with patch("koi.cron.CronManager") as mock_cron:
+        mock_cron.return_value.remove_job.side_effect = KeyError("job not found")
         tool_call = {
             "function": {
                 "name": "remove_cron_job",
@@ -1035,8 +1037,8 @@ async def test_tool_executor_update_memory_error():
         os.chdir(temp_dir)
         try:
             executor = ToolExecutor(Mock())
-            with patch("koi.memory.Memory") as MockMem:
-                MockMem.return_value.append.side_effect = OSError("disk full")
+            with patch("koi.memory.Memory") as mock_mem:
+                mock_mem.return_value.append.side_effect = OSError("disk full")
                 tool_call = {
                     "function": {
                         "name": "update_memory",
@@ -1135,6 +1137,7 @@ async def test_tool_executor_glob_files_sandbox_blocked():
 async def test_tool_executor_glob_files_default_base_dir():
     """glob_files defaults to CWD when base_dir is omitted."""
     import os
+
     with TemporaryDirectory() as temp_dir:
         sandbox = _make_sandbox(temp_dir)
         td = Path(temp_dir)
@@ -1208,11 +1211,13 @@ async def test_tool_executor_grep_files_case_insensitive():
         tool_call = {
             "function": {
                 "name": "grep_files",
-                "arguments": json.dumps({
-                    "pattern": "hello world",
-                    "path": temp_dir,
-                    "case_insensitive": True,
-                }),
+                "arguments": json.dumps(
+                    {
+                        "pattern": "hello world",
+                        "path": temp_dir,
+                        "case_insensitive": True,
+                    }
+                ),
             }
         }
         result = await executor.execute_tool(tool_call)
@@ -1232,11 +1237,13 @@ async def test_tool_executor_grep_files_file_glob_filter():
         tool_call = {
             "function": {
                 "name": "grep_files",
-                "arguments": json.dumps({
-                    "pattern": "import",
-                    "path": temp_dir,
-                    "file_glob": "*.py",
-                }),
+                "arguments": json.dumps(
+                    {
+                        "pattern": "import",
+                        "path": temp_dir,
+                        "file_glob": "*.py",
+                    }
+                ),
             }
         }
         result = await executor.execute_tool(tool_call)
@@ -1323,13 +1330,16 @@ async def test_tool_executor_grep_files_sandbox_blocked():
 async def test_spawn_subagent_acp_mode():
     """spawn_subagent with agent param routes to ACP."""
     from koi.tools import ToolExecutor
+
     mock_sm = AsyncMock()
-    mock_sm.spawn_acp_session = AsyncMock(return_value={
-        "status": "accepted",
-        "run_id": "abc123",
-        "label": "claude-code",
-        "agent": "claude-code",
-    })
+    mock_sm.spawn_acp_session = AsyncMock(
+        return_value={
+            "status": "accepted",
+            "run_id": "abc123",
+            "label": "claude-code",
+            "agent": "claude-code",
+        }
+    )
     executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
     result = await executor._spawn_subagent(agent="claude-code", label="test-cc")
     assert result["success"] is True
@@ -1340,11 +1350,14 @@ async def test_spawn_subagent_acp_mode():
 async def test_spawn_subagent_acp_error():
     """spawn_subagent ACP error propagates."""
     from koi.tools import ToolExecutor
+
     mock_sm = AsyncMock()
-    mock_sm.spawn_acp_session = AsyncMock(return_value={
-        "status": "error",
-        "error": "not installed",
-    })
+    mock_sm.spawn_acp_session = AsyncMock(
+        return_value={
+            "status": "error",
+            "error": "not installed",
+        }
+    )
     executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
     result = await executor._spawn_subagent(agent="codex", label="test")
     assert result["success"] is False
@@ -1354,12 +1367,15 @@ async def test_spawn_subagent_acp_error():
 async def test_spawn_subagent_session_mode():
     """spawn_subagent with mode=session."""
     from koi.tools import ToolExecutor
+
     mock_sm = AsyncMock()
-    mock_sm.spawn_session = AsyncMock(return_value={
-        "status": "accepted",
-        "run_id": "def456",
-        "label": "my-session",
-    })
+    mock_sm.spawn_session = AsyncMock(
+        return_value={
+            "status": "accepted",
+            "run_id": "def456",
+            "label": "my-session",
+        }
+    )
     executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
     result = await executor._spawn_subagent(mode="session", label="my-session")
     assert result["success"] is True
@@ -1369,6 +1385,7 @@ async def test_spawn_subagent_session_mode():
 async def test_spawn_subagent_session_no_label():
     """spawn_subagent session mode requires label."""
     from koi.tools import ToolExecutor
+
     executor = ToolExecutor(MagicMock(), MagicMock(), MagicMock())
     result = await executor._spawn_subagent(mode="session")
     assert result["success"] is False
@@ -1378,6 +1395,7 @@ async def test_spawn_subagent_session_no_label():
 async def test_spawn_subagent_run_no_task():
     """spawn_subagent run mode requires task."""
     from koi.tools import ToolExecutor
+
     executor = ToolExecutor(MagicMock(), MagicMock(), MagicMock())
     result = await executor._spawn_subagent(mode="run")
     assert result["success"] is False
@@ -1387,12 +1405,15 @@ async def test_spawn_subagent_run_no_task():
 async def test_send_to_subagent_success():
     """send_to_subagent routes to manager."""
     from koi.tools import ToolExecutor
+
     mock_sm = AsyncMock()
-    mock_sm.send = AsyncMock(return_value={
-        "type": "response",
-        "content": "Done!",
-        "usage": {},
-    })
+    mock_sm.send = AsyncMock(
+        return_value={
+            "type": "response",
+            "content": "Done!",
+            "usage": {},
+        }
+    )
     executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
     result = await executor._send_to_subagent(target="test", message="do it")
     assert result["success"] is True
@@ -1402,6 +1423,7 @@ async def test_send_to_subagent_success():
 async def test_send_to_subagent_error():
     """send_to_subagent error propagation."""
     from koi.tools import ToolExecutor
+
     mock_sm = AsyncMock()
     mock_sm.send = AsyncMock(return_value={"error": "not found"})
     executor = ToolExecutor(MagicMock(), MagicMock(), mock_sm)
@@ -1412,6 +1434,7 @@ async def test_send_to_subagent_error():
 async def test_list_available_agents():
     """list_available_agents returns agent info."""
     from koi.tools import ToolExecutor
+
     executor = ToolExecutor(MagicMock(), MagicMock(), MagicMock())
     result = await executor._list_available_agents()
     assert result["success"] is True
@@ -1423,12 +1446,10 @@ async def test_list_available_agents():
 async def test_spawn_subagent_no_manager():
     """spawn_subagent without manager returns error."""
     from koi.tools import ToolExecutor
+
     executor = ToolExecutor(MagicMock(), MagicMock(), None)
     result = await executor._spawn_subagent(task="test")
     assert result["success"] is False
 
     result2 = await executor._send_to_subagent(target="x", message="y")
     assert result2["success"] is False
-
-from unittest.mock import AsyncMock, MagicMock
-

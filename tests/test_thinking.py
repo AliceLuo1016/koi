@@ -3,22 +3,19 @@
 import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-import httpx
 import pytest
 from click.testing import CliRunner
 
-from koi.config import Config, normalize_think_level, THINK_LEVELS
+from koi.config import THINK_LEVELS, Config, normalize_think_level
 from koi.llm import (
-    LLMClient,
     _ANTHROPIC_THINKING_BUDGETS,
-    _ANTHROPIC_MODEL_MAX_TOKENS,
     _CC_REASONING_EFFORT,
+    LLMClient,
     _adjust_max_tokens_for_thinking,
     _get_anthropic_model_max,
 )
-
 
 # ── normalize_think_level ──
 
@@ -71,23 +68,31 @@ class TestConfigThinking:
     def test_load_thinking_level_from_json(self):
         with TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.json"
-            config_path.write_text(json.dumps({
-                "api_base": "https://example.com",
-                "api_key": "test",
-                "model": "test-model",
-                "thinking_level": "high",
-            }))
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "api_base": "https://example.com",
+                        "api_key": "test",
+                        "model": "test-model",
+                        "thinking_level": "high",
+                    }
+                )
+            )
             config = Config.load(config_path)
             assert config.thinking_level == "high"
 
     def test_load_missing_thinking_level_defaults_to_low(self):
         with TemporaryDirectory() as tmpdir:
             config_path = Path(tmpdir) / "config.json"
-            config_path.write_text(json.dumps({
-                "api_base": "https://example.com",
-                "api_key": "test",
-                "model": "test-model",
-            }))
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "api_base": "https://example.com",
+                        "api_key": "test",
+                        "model": "test-model",
+                    }
+                )
+            )
             config = Config.load(config_path)
             assert config.thinking_level == "low"
 
@@ -147,7 +152,10 @@ class TestAnthropicThinking:
             payload = mock_post.call_args[1]["json"]
             assert "thinking" in payload
             assert payload["thinking"]["type"] == "enabled"
-            assert payload["thinking"]["budget_tokens"] == _ANTHROPIC_THINKING_BUDGETS["medium"]
+            assert (
+                payload["thinking"]["budget_tokens"]
+                == _ANTHROPIC_THINKING_BUDGETS["medium"]
+            )
 
     @pytest.mark.asyncio
     async def test_payload_excludes_thinking_when_off(self):
@@ -239,7 +247,9 @@ class TestAnthropicThinking:
             }
             mock_response.raise_for_status = MagicMock()
 
-            with patch.object(client.client, "post", new_callable=AsyncMock) as mock_post:
+            with patch.object(
+                client.client, "post", new_callable=AsyncMock
+            ) as mock_post:
                 mock_post.return_value = mock_response
                 await client.chat([{"role": "user", "content": "test"}])
                 payload = mock_post.call_args[1]["json"]
@@ -388,7 +398,9 @@ class TestChatCompletionsThinking:
             }
             mock_response.raise_for_status = MagicMock()
 
-            with patch.object(client.client, "post", new_callable=AsyncMock) as mock_post:
+            with patch.object(
+                client.client, "post", new_callable=AsyncMock
+            ) as mock_post:
                 mock_post.return_value = mock_response
                 await client.chat([{"role": "user", "content": "test"}])
                 payload = mock_post.call_args[1]["json"]
@@ -486,10 +498,13 @@ class TestCLIThinking:
 
     def test_run_accepts_thinking_flag(self):
         from koi.cli import main
+
         runner = CliRunner()
-        with patch("koi.cli.Config.load") as mock_load, \
-             patch("koi.cli.Agent") as mock_agent, \
-             patch("koi.cli.asyncio") as mock_asyncio:
+        with (
+            patch("koi.cli.Config.load") as mock_load,
+            patch("koi.cli.Agent") as mock_agent,
+            patch("koi.cli.asyncio"),
+        ):
             mock_config = Config(
                 api_base="https://example.com",
                 api_key="test",
@@ -500,16 +515,19 @@ class TestCLIThinking:
             mock_agent_instance = MagicMock()
             mock_agent.return_value = mock_agent_instance
 
-            result = runner.invoke(main, ["run", "--thinking", "high", "--task", "hello"])
+            runner.invoke(main, ["run", "--thinking", "high", "--task", "hello"])
 
             assert mock_config.thinking_level == "high"
 
     def test_run_without_thinking_flag_uses_config_default(self):
         from koi.cli import main
+
         runner = CliRunner()
-        with patch("koi.cli.Config.load") as mock_load, \
-             patch("koi.cli.Agent") as mock_agent, \
-             patch("koi.cli.asyncio") as mock_asyncio:
+        with (
+            patch("koi.cli.Config.load") as mock_load,
+            patch("koi.cli.Agent") as mock_agent,
+            patch("koi.cli.asyncio"),
+        ):
             mock_config = Config(
                 api_base="https://example.com",
                 api_key="test",
@@ -520,16 +538,19 @@ class TestCLIThinking:
             mock_agent_instance = MagicMock()
             mock_agent.return_value = mock_agent_instance
 
-            result = runner.invoke(main, ["run", "--task", "hello"])
+            runner.invoke(main, ["run", "--task", "hello"])
 
             assert mock_config.thinking_level == "medium"
 
     def test_run_thinking_off_flag(self):
         from koi.cli import main
+
         runner = CliRunner()
-        with patch("koi.cli.Config.load") as mock_load, \
-             patch("koi.cli.Agent") as mock_agent, \
-             patch("koi.cli.asyncio") as mock_asyncio:
+        with (
+            patch("koi.cli.Config.load") as mock_load,
+            patch("koi.cli.Agent") as mock_agent,
+            patch("koi.cli.asyncio"),
+        ):
             mock_config = Config(
                 api_base="https://example.com",
                 api_key="test",
@@ -540,7 +561,7 @@ class TestCLIThinking:
             mock_agent_instance = MagicMock()
             mock_agent.return_value = mock_agent_instance
 
-            result = runner.invoke(main, ["run", "--thinking", "off", "--task", "hello"])
+            runner.invoke(main, ["run", "--thinking", "off", "--task", "hello"])
 
             assert mock_config.thinking_level == "off"
 
@@ -681,7 +702,8 @@ class TestAnthropicMaxTokensAdjusted:
 
     @pytest.mark.asyncio
     async def test_budget_reduced_when_model_max_small(self):
-        """When model max is very constraining, budget is reduced to reserve output tokens."""
+        """When model max is very constraining, budget is reduced
+        to reserve output tokens."""
         config = Config(
             api_base="https://api.anthropic.com/v1/messages",
             api_key="sk-ant-test",

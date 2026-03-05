@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Optional
 
 
 @dataclass
@@ -16,7 +15,7 @@ class InboundMessage:
     user_name: str
     channel_id: str
     session_key: str
-    thread_id: Optional[str] = None
+    thread_id: str | None = None
     source: str = ""  # "slack", "webhook", etc.
     raw: dict = field(default_factory=dict)
 
@@ -27,8 +26,8 @@ class OutboundMessage:
 
     text: str
     session_key: str
-    thread_id: Optional[str] = None
-    reaction: Optional[str] = None  # e.g. "eyes" for ack
+    thread_id: str | None = None
+    reaction: str | None = None  # e.g. "eyes" for ack
 
 
 class Channel(ABC):

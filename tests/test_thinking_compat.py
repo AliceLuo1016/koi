@@ -1,14 +1,12 @@
 """Tests for model-aware thinking parameter safety."""
 
-import json
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 from koi.config import Config
 from koi.llm import LLMClient, supports_thinking
-
 
 # ── supports_thinking: Anthropic models ──
 
@@ -105,7 +103,8 @@ class TestSupportsThinkingOther:
 
 class TestAnthropicPayloadGating:
     async def test_no_thinking_for_unsupported_anthropic_model(self):
-        """claude-3-haiku should NOT get thinking params even with thinking_level=high."""
+        """claude-3-haiku should NOT get thinking params
+        even with thinking_level=high."""
         config = Config(
             api_base="https://api.anthropic.com/v1/messages",
             api_key="sk-ant-test",
@@ -270,7 +269,10 @@ class TestResponsesPayloadGating:
             resp.json.return_value = {
                 "id": "resp_1",
                 "output": [
-                    {"type": "message", "content": [{"type": "output_text", "text": "hi"}]}
+                    {
+                        "type": "message",
+                        "content": [{"type": "output_text", "text": "hi"}],
+                    }
                 ],
             }
             return resp
@@ -286,7 +288,8 @@ class TestResponsesPayloadGating:
 
 class TestThinkingFallback:
     async def test_fallback_disables_thinking_on_error(self):
-        """After a thinking-related 400 error, thinking is disabled and request retried."""
+        """After a thinking-related 400 error, thinking is disabled
+        and request retried."""
         config = Config(
             api_base="https://api.anthropic.com/v1/messages",
             api_key="sk-ant-test",
@@ -377,9 +380,7 @@ class TestThinkingFallback:
             mock_resp.status_code = 400
             mock_resp.text = "invalid_request_error: messages is required"
             mock_resp.headers = {}
-            raise httpx.HTTPStatusError(
-                "400", request=MagicMock(), response=mock_resp
-            )
+            raise httpx.HTTPStatusError("400", request=MagicMock(), response=mock_resp)
 
         from koi.errors import KoiAPIError
 
@@ -394,21 +395,33 @@ class TestThinkingFallback:
 
 class TestEffectiveThinkingLevel:
     def test_returns_off_when_thinking_off(self):
-        config = Config(model="claude-sonnet-4", api_format="anthropic", thinking_level="off")
+        config = Config(
+            model="claude-sonnet-4", api_format="anthropic", thinking_level="off"
+        )
         assert config.effective_thinking_level() == "off"
 
     def test_returns_level_for_supported_model(self):
-        config = Config(model="claude-sonnet-4", api_format="anthropic", thinking_level="high")
+        config = Config(
+            model="claude-sonnet-4", api_format="anthropic", thinking_level="high"
+        )
         assert config.effective_thinking_level() == "high"
 
     def test_returns_off_for_unsupported_model(self):
-        config = Config(model="claude-3-haiku", api_format="anthropic", thinking_level="high")
+        config = Config(
+            model="claude-3-haiku", api_format="anthropic", thinking_level="high"
+        )
         assert config.effective_thinking_level() == "off"
 
     def test_returns_off_for_unknown_model(self):
-        config = Config(model="llama-3.1-70b", api_format="chat_completions", thinking_level="medium")
+        config = Config(
+            model="llama-3.1-70b",
+            api_format="chat_completions",
+            thinking_level="medium",
+        )
         assert config.effective_thinking_level() == "off"
 
     def test_returns_level_for_o3(self):
-        config = Config(model="o3-mini", api_format="responses", thinking_level="medium")
+        config = Config(
+            model="o3-mini", api_format="responses", thinking_level="medium"
+        )
         assert config.effective_thinking_level() == "medium"

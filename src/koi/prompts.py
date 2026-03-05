@@ -6,7 +6,7 @@ import platform
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from .config import Config
 from .memory import Memory
@@ -36,7 +36,8 @@ def build_system_prompt(
     # 3. Tool call style
     sections.append("""## Tool Call Style
 - Do not narrate routine, low-risk tool calls — just call the tool.
-- Narrate only for multi-step work, complex problems, or sensitive actions (e.g., deletions).
+- Narrate only for multi-step work, complex problems,
+  or sensitive actions (e.g., deletions).
 - Keep narration brief and value-dense.""")
 
     # 4. Safety
@@ -56,13 +57,16 @@ def build_system_prompt(
 
     # 6. Memory guidance
     sections.append("""## Memory
-Before answering questions about prior work, decisions, or preferences: check memory first using update_memory.
-When analyzing logs, use create_alert / list_alerts / resolve_alert for structured issue tracking.""")
+Before answering questions about prior work, decisions,
+or preferences: check memory first using update_memory.
+When analyzing logs, use create_alert / list_alerts /
+resolve_alert for structured issue tracking.""")
 
     # 7. Cron
     sections.append("""## Cron
 Use built-in cron tools for scheduling — do NOT use exec_command for cron management.
-- add_cron_job(schedule, task) — task is a natural language instruction koi interprets each run
+- add_cron_job(schedule, task) — task is a natural
+  language instruction koi interprets each run
 - list_cron_jobs() / remove_cron_job(job_id)
 Cron logs are stored in .koi/cron-logs/ automatically.""")
 
@@ -84,11 +88,17 @@ Cron logs are stored in .koi/cron-logs/ automatically.""")
     # 11. Non-interactive mode
     if non_interactive:
         sections.append("""## Non-Interactive Mode
-IMPORTANT: You are running in non-interactive (cron) mode. There is no user to respond.
-- Do NOT ask for confirmation or clarification. Execute all tool calls and commands directly.
-- Do NOT wait for user input. Complete the task autonomously and report the result.
-- Do NOT create or schedule cron jobs. You ARE a cron job. Just execute the task immediately.
-- Ignore phrases like "every hour" or "every minute" in the task — those describe the cron schedule, not what you should do. Focus on the actual action.""")
+IMPORTANT: You are running in non-interactive (cron) mode.
+There is no user to respond.
+- Do NOT ask for confirmation or clarification.
+  Execute all tool calls and commands directly.
+- Do NOT wait for user input. Complete the task
+  autonomously and report the result.
+- Do NOT create or schedule cron jobs. You ARE a cron
+  job. Just execute the task immediately.
+- Ignore phrases like "every hour" or "every minute"
+  in the task — those describe the cron schedule, not
+  what you should do. Focus on the actual action.""")
 
     # 12. Context
     context_section = _build_context_section()
@@ -108,7 +118,9 @@ Example: <think>Short internal reasoning.</think><final>Hey there!</final>"""
 
 
 _TOOL_TIPS = {
-    "read_file": "Output truncated to 2000 lines / 50KB. Use offset/limit for large files.",
+    "read_file": (
+        "Output truncated to 2000 lines / 50KB. Use offset/limit for large files."
+    ),
     "write_file": "Creates parent directories automatically.",
     "edit_file": "old_text must match exactly including whitespace.",
     "exec_command": "Output capped at 50KB. Use timeout for long-running commands.",
@@ -153,7 +165,8 @@ def _build_skills_section(config: Config) -> str:
 {skills_summary}
 
 Before responding: scan available skills above.
-- If one clearly matches the user's request, use read_skill to load it, then follow its instructions.
+- If one clearly matches the user's request, use
+  read_skill to load it, then follow its instructions.
 - If none clearly match, do not read any skill.
 - Never read more than one skill upfront; only read after selecting.
 - Use read_skill (not read_file) to load skills."""
@@ -205,15 +218,18 @@ def _build_alerts_section() -> str:
         pending = []
         for f in sorted(alerts_dir.glob("*.md")):
             text = f.read_text(encoding="utf-8")
-            status_match = re.search(r'\*\*Status:\*\*\s*(\w+)', text)
+            status_match = re.search(r"\*\*Status:\*\*\s*(\w+)", text)
             if status_match and status_match.group(1) == "pending":
-                title_match = re.search(r'^#\s+(.+)', text, re.MULTILINE)
+                title_match = re.search(r"^#\s+(.+)", text, re.MULTILINE)
                 title = title_match.group(1) if title_match else f.stem
                 pending.append(title)
         if not pending:
             return ""
         titles = "\n".join(f"- {t}" for t in pending)
-        return f"⚠️ You have {len(pending)} pending alert(s). Offer to review them.\n{titles}"
+        return (
+            f"⚠️ You have {len(pending)} pending"
+            f" alert(s). Offer to review them.\n{titles}"
+        )
     except Exception:
         return ""
 
@@ -230,7 +246,7 @@ def _build_context_section() -> str:
 - Working Directory: {current_dir}
 - Operating System: {system_info}
 - Python Version: {python_version}
-- User: {os.getenv('USER', 'unknown')}
+- User: {os.getenv("USER", "unknown")}
 
 Use this context to provide relevant assistance."""
 
@@ -269,34 +285,32 @@ def truncate_tool_result(text: str, context_window: int) -> str:
     return cut + _TRUNCATION_SUFFIX
 
 
-def build_tool_call_message(tool_call: Dict[str, Any]) -> Dict[str, Any]:
+def build_tool_call_message(tool_call: dict[str, Any]) -> dict[str, Any]:
     """Build a message for a tool call in OpenAI format."""
-    return {
-        "role": "assistant",
-        "content": None,
-        "tool_calls": [tool_call]
-    }
+    return {"role": "assistant", "content": None, "tool_calls": [tool_call]}
 
 
 def build_tool_result_message(
-    tool_call: Dict[str, Any],
-    result: Dict[str, Any],
+    tool_call: dict[str, Any],
+    result: dict[str, Any],
     context_window: int = 128_000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a message for tool result in OpenAI format."""
     return {
         "role": "tool",
         "tool_call_id": tool_call["id"],
-        "content": _format_tool_result(result, context_window)
+        "content": _format_tool_result(result, context_window),
     }
 
 
-def _format_tool_result(result: Dict[str, Any], context_window: int = 128_000) -> str:
+def _format_tool_result(result: dict[str, Any], context_window: int = 128_000) -> str:
     """Format tool result for inclusion in conversation."""
     if not result.get("success", False):
         error_msg = result.get("error", "")
         if not error_msg:
-            error_msg = (result.get("stderr") or result.get("stdout") or "Unknown error").strip()
+            error_msg = (
+                result.get("stderr") or result.get("stdout") or "Unknown error"
+            ).strip()
         return f"Error: {error_msg}"
 
     # Format based on result content

@@ -1,7 +1,6 @@
 """Tests for ACP client."""
 
-import asyncio
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -42,6 +41,7 @@ class TestKoiACPClient:
         update.__class__ = type("AgentMessageChunk", (), {})
         # Use real isinstance check
         from koi.acp_client import AgentMessageChunk
+
         chunk = MagicMock(spec=AgentMessageChunk)
         chunk.content = MagicMock()
         chunk.content.text = "hello world"
@@ -97,6 +97,7 @@ class TestACPSession:
 class TestSessionUpdateThoughts:
     async def test_thought_chunk(self):
         from koi.acp_client import AgentThoughtChunk
+
         client = KoiACPClient()
         chunk = MagicMock(spec=AgentThoughtChunk)
         chunk.content = MagicMock()
@@ -108,6 +109,7 @@ class TestSessionUpdateThoughts:
 class TestSessionUpdateToolCalls:
     async def test_tool_call_start(self):
         from koi.acp_client import ToolCallStart
+
         client = KoiACPClient()
         tc = MagicMock(spec=ToolCallStart)
         tc.tool_call_id = "tc1"
@@ -119,6 +121,7 @@ class TestSessionUpdateToolCalls:
 
     async def test_tool_call_progress(self):
         from koi.acp_client import ToolCallProgress
+
         client = KoiACPClient()
         tc = MagicMock(spec=ToolCallProgress)
         tc.tool_call_id = "tc1"
@@ -131,6 +134,7 @@ class TestSessionUpdateToolCalls:
 class TestSessionUpdateUsage:
     async def test_usage_update(self):
         from koi.acp_client import UsageUpdate
+
         client = KoiACPClient()
         u = MagicMock(spec=UsageUpdate)
         u.usage = {"input_tokens": 100, "output_tokens": 50}
@@ -139,6 +143,7 @@ class TestSessionUpdateUsage:
 
     async def test_usage_update_non_dict(self):
         from koi.acp_client import UsageUpdate
+
         client = KoiACPClient()
         u = MagicMock(spec=UsageUpdate)
         u.usage = MagicMock()  # not a dict
@@ -157,7 +162,7 @@ class TestWriteTextFile:
     async def test_write_failure(self):
         client = KoiACPClient()
         # Write to invalid path
-        resp = await client.write_text_file("x", "/nonexistent/dir/file.txt", session_id="s1")
+        await client.write_text_file("x", "/nonexistent/dir/file.txt", session_id="s1")
         # Should not raise, returns empty response
 
 
@@ -216,6 +221,7 @@ class TestACPSessionClose:
 class TestRequestPermissionEmpty:
     async def test_auto_approve_empty_options(self):
         client = KoiACPClient(auto_approve=True)
-        from koi.acp_client import DeniedOutcome
-        resp = await client.request_permission(options=[], session_id="s1", tool_call=MagicMock())
+        resp = await client.request_permission(
+            options=[], session_id="s1", tool_call=MagicMock()
+        )
         assert resp.outcome.outcome == "cancelled"

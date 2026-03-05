@@ -3,13 +3,13 @@
 import json
 import os
 from pathlib import Path
-from typing import List, Dict, Any, Optional
+from typing import Any
 
 # Valid thinking levels (off disables, others set increasing reasoning effort)
 THINK_LEVELS = ("off", "minimal", "low", "medium", "high")
 
 
-def normalize_think_level(value: str) -> Optional[str]:
+def normalize_think_level(value: str) -> str | None:
     """Normalize a user-provided thinking level string to a canonical level.
 
     Returns None for unrecognized inputs.
@@ -36,13 +36,13 @@ def normalize_think_level(value: str) -> Optional[str]:
     return mapping.get(v)
 
 
-def load_claude_code_api_key() -> Optional[str]:
+def load_claude_code_api_key() -> str | None:
     """Load the Anthropic API key from Claude Code's config (~/.claude.json)."""
     claude_json = Path.home() / ".claude.json"
     if not claude_json.exists():
         return None
     try:
-        with open(claude_json, "r") as f:
+        with open(claude_json) as f:
             data = json.load(f)
         key = data.get("primaryApiKey", "")
         if key and key.startswith("sk-ant-"):
@@ -62,13 +62,13 @@ class Config:
         model: str = "openai/openai/gpt-5.2-codex",
         max_tokens: int = 4096,
         context_window: int = 128000,
-        skills_paths: List[str] = None,
+        skills_paths: list[str] = None,
         temperature: float = None,
         api_format: str = None,
         thinking_level: str = "low",
         prompt_caching: bool = True,
-        server: Dict[str, Any] = None,
-        channels: Dict[str, Any] = None,
+        server: dict[str, Any] = None,
+        channels: dict[str, Any] = None,
         debug: bool = False,
     ):
         self.api_base = api_base
@@ -77,7 +77,9 @@ class Config:
         self.context_window = context_window
         self.skills_paths = skills_paths or [".koi/skills"]
         self.temperature = temperature
-        self.thinking_level = thinking_level if thinking_level in THINK_LEVELS else "low"
+        self.thinking_level = (
+            thinking_level if thinking_level in THINK_LEVELS else "low"
+        )
         self.prompt_caching = prompt_caching
         # Auto-detect api_format from model name if not explicitly set
         if api_format is not None:
@@ -98,7 +100,7 @@ class Config:
 
         # Channel configs
         _channels = channels or {}
-        self.channels: Dict[str, Any] = _channels
+        self.channels: dict[str, Any] = _channels
 
         # Resolve API key: explicit > env var > Claude Code config (for anthropic)
         if api_key:
@@ -109,19 +111,19 @@ class Config:
             self.api_key = load_claude_code_api_key() or ""
         else:
             self.api_key = ""
-    
+
     @classmethod
     def load(cls, config_path: Path = None) -> "Config":
         """Load configuration from .koi/config.json."""
         if config_path is None:
             config_path = Path.cwd() / ".koi" / "config.json"
-        
+
         if not config_path.exists():
             raise FileNotFoundError(f"Config file not found: {config_path}")
-        
-        with open(config_path, "r") as f:
+
+        with open(config_path) as f:
             data = json.load(f)
-        
+
         return cls(
             api_base=data.get("api_base", ""),
             api_key=data.get("api_key", ""),
@@ -137,14 +139,14 @@ class Config:
             channels=data.get("channels"),
             debug=data.get("debug", False),
         )
-    
+
     def save(self, config_path: Path = None):
         """Save configuration to .koi/config.json."""
         if config_path is None:
             config_path = Path.cwd() / ".koi" / "config.json"
-        
+
         config_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         data = {
             "api_base": self.api_base,
             "api_key": self.api_key,
@@ -158,7 +160,11 @@ class Config:
         }
         if self.temperature is not None:
             data["temperature"] = self.temperature
-        if self.server_enabled or self.server_host != "0.0.0.0" or self.server_port != 8080:
+        if (
+            self.server_enabled
+            or self.server_host != "0.0.0.0"
+            or self.server_port != 8080
+        ):
             data["server"] = {
                 "enabled": self.server_enabled,
                 "host": self.server_host,
@@ -181,11 +187,12 @@ class Config:
             return "off"
         # Lazy import to avoid circular dependency (llm imports config)
         from .llm import supports_thinking
+
         if supports_thinking(self.model, self.api_format):
             return self.thinking_level
         return "off"
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert config to dictionary."""
         d = {
             "api_base": self.api_base,
@@ -200,7 +207,11 @@ class Config:
         }
         if self.temperature is not None:
             d["temperature"] = self.temperature
-        if self.server_enabled or self.server_host != "0.0.0.0" or self.server_port != 8080:
+        if (
+            self.server_enabled
+            or self.server_host != "0.0.0.0"
+            or self.server_port != 8080
+        ):
             d["server"] = {
                 "enabled": self.server_enabled,
                 "host": self.server_host,
@@ -217,7 +228,7 @@ def create_default_config(
     api_key: str = "",
     api_format: str = "responses",
     context_window: int = 128000,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Create a default configuration dictionary."""
     return {
         "api_base": api_base,

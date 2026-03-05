@@ -136,7 +136,6 @@ def test_sandbox_get_safe_env():
         assert "EDITOR" not in env or "EDITOR" in {"HOME", "USER"}
 
 
-
 def test_sandbox_check_command_allowed():
     """Normal command passes."""
     with TemporaryDirectory() as td:
@@ -173,5 +172,3 @@ def test_sandbox_check_command_confirm():
         assert allowed
         assert confirm
         assert "confirmation" in reason.lower()
-
-

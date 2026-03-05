@@ -164,9 +164,7 @@ async def test_create_summary_empty_choices_fallback():
     """_create_summary returns fallback string when LLM returns no choices."""
     compactor = _make_compactor()
     compactor.llm_client.chat = AsyncMock(return_value={"choices": []})
-    summary = await compactor._create_summary(
-        [{"role": "user", "content": "hello"}]
-    )
+    summary = await compactor._create_summary([{"role": "user", "content": "hello"}])
     assert "unavailable" in summary.lower() or summary
 
 
@@ -200,9 +198,7 @@ async def test_compact_messages_summary_is_first():
     compactor = _make_compactor(context_window=128000)
 
     compactor.llm_client.chat = AsyncMock(
-        return_value={
-            "choices": [{"message": {"content": "User asked about files."}}]
-        }
+        return_value={"choices": [{"message": {"content": "User asked about files."}}]}
     )
 
     messages = [
@@ -224,8 +220,6 @@ def test_tokenizer_fallback(monkeypatch):
     """Falls back to cl100k_base when gpt-4 encoding is unavailable."""
     import tiktoken
 
-    original_for_model = tiktoken.encoding_for_model
-
     def raise_key_error(model):
         raise KeyError(f"Unknown model: {model}")
 
@@ -233,7 +227,6 @@ def test_tokenizer_fallback(monkeypatch):
 
     # Importing after monkeypatching won't help since module is already loaded;
     # instantiate directly with patched tiktoken
-    from koi.llm import LLMClient
     from koi.compaction import ContextCompactor
 
     compactor = ContextCompactor.__new__(ContextCompactor)

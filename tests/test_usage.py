@@ -1,17 +1,17 @@
 """Tests for token usage tracking."""
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
 from koi.config import Config
 from koi.llm import LLMClient
-from koi.usage import TokenUsage, estimate_cost, log_usage
-
+from koi.usage import TokenUsage, estimate_cost, get_usage_history, log_usage
 
 # ── TokenUsage unit tests ──
 
@@ -357,12 +357,23 @@ class TestLLMClientStreamingUsage:
         assert client.usage.output_tokens == 90
 
     async def test_streaming_anthropic_usage(self):
-        """Usage extracted from message_start and message_delta in Anthropic streaming."""
+        """Usage from message_start and message_delta in Anthropic streaming."""
         client = _make_client("anthropic", model="claude-sonnet-4")
         lines = [
-            'data: {"type":"message_start","message":{"usage":{"input_tokens":400,"output_tokens":0,"cache_read_input_tokens":100,"cache_creation_input_tokens":50}}}',
-            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}',
+            (
+                'data: {"type":"message_start","message":'
+                '{"usage":{"input_tokens":400,"output_tokens":0,'
+                '"cache_read_input_tokens":100,'
+                '"cache_creation_input_tokens":50}}}'
+            ),
+            (
+                'data: {"type":"content_block_start","index":0,'
+                '"content_block":{"type":"text","text":""}}'
+            ),
+            (
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"hi"}}'
+            ),
             'data: {"type":"message_delta","usage":{"output_tokens":30}}',
             'data: {"type":"message_stop"}',
         ]
@@ -389,18 +400,25 @@ class TestLLMClientStreamingUsage:
         """Usage extracted from stream_chat (Anthropic events path)."""
         client = _make_client("anthropic", model="claude-sonnet-4")
         lines = [
-            'data: {"type":"message_start","message":{"usage":{"input_tokens":300,"output_tokens":0}}}',
-            'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-            'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"world"}}',
+            (
+                'data: {"type":"message_start","message":'
+                '{"usage":{"input_tokens":300,"output_tokens":0}}}'
+            ),
+            (
+                'data: {"type":"content_block_start","index":0,'
+                '"content_block":{"type":"text","text":""}}'
+            ),
+            (
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"world"}}'
+            ),
             'data: {"type":"message_delta","usage":{"output_tokens":20}}',
             'data: {"type":"message_stop"}',
         ]
 
         with patch.object(client.client, "stream", return_value=_StreamCtx(lines)):
             events = []
-            async for event in client.stream_chat(
-                [{"role": "user", "content": "hi"}]
-            ):
+            async for event in client.stream_chat([{"role": "user", "content": "hi"}]):
                 events.append(event)
                 if event.type == "usage":
                     client._extract_usage_from_event(event)
@@ -475,6 +493,7 @@ class TestGetUsageHistory:
         with TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "usage-log.jsonl"
             from datetime import timedelta
+
             old_ts = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
             entry = {
                 "timestamp": old_ts,
@@ -512,12 +531,15 @@ class TestGetUsageHistory:
             log_path = Path(tmp) / "usage-log.jsonl"
             lines = [
                 "not valid json\n",
-                json.dumps({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "model": "m",
-                    "session_tokens": {"input_tokens": 100, "output_tokens": 50},
-                    "estimated_cost": 0.0,
-                }) + "\n",
+                json.dumps(
+                    {
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                        "model": "m",
+                        "session_tokens": {"input_tokens": 100, "output_tokens": 50},
+                        "estimated_cost": 0.0,
+                    }
+                )
+                + "\n",
                 json.dumps({"bad": "entry"}) + "\n",  # missing timestamp
             ]
             log_path.write_text("".join(lines))
@@ -529,12 +551,19 @@ class TestGetUsageHistory:
             log_path = Path(tmp) / "usage-log.jsonl"
             entries = []
             for i in range(3):
-                entries.append(json.dumps({
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "model": "test-model",
-                    "session_tokens": {"input_tokens": 100, "output_tokens": 50},
-                    "estimated_cost": 0.01,
-                }))
+                entries.append(
+                    json.dumps(
+                        {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "model": "test-model",
+                            "session_tokens": {
+                                "input_tokens": 100,
+                                "output_tokens": 50,
+                            },
+                            "estimated_cost": 0.01,
+                        }
+                    )
+                )
             log_path.write_text("\n".join(entries) + "\n")
             result = get_usage_history(Path(tmp))
             assert "Sessions: 3" in result
@@ -620,10 +649,12 @@ class TestStreamingFallbackUsage:
             payload = kwargs.get("json", args[2] if len(args) > 2 else {})
             if call_count == 1 and "stream_options" in payload:
                 return _StreamCtx([], status_code=400)
-            return _StreamCtx([
-                'data: {"choices":[{"delta":{"content":"ok"}}]}',
-                "data: [DONE]",
-            ])
+            return _StreamCtx(
+                [
+                    'data: {"choices":[{"delta":{"content":"ok"}}]}',
+                    "data: [DONE]",
+                ]
+            )
 
         with patch.object(client.client, "stream", side_effect=mock_stream):
             events = []
@@ -633,8 +664,3 @@ class TestStreamingFallbackUsage:
                 events.append(event)
 
         assert client._stream_include_usage is False
-
-
-# ── Import get_usage_history ──
-from koi.usage import get_usage_history
-from datetime import datetime, timezone

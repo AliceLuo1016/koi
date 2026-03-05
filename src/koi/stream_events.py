@@ -1,7 +1,7 @@
 """Unified streaming event protocol for LLM responses."""
 
 from dataclasses import dataclass, field
-from typing import Any, Dict
+from typing import Any
 
 
 @dataclass
@@ -17,11 +17,13 @@ class StreamEvent:
     - thinking_end: Thinking block finished (content = full thinking text)
     - toolcall_start: Tool call started (contentIndex, tool_name, tool_call_id)
     - toolcall_delta: Tool call argument chunk (delta)
-    - toolcall_end: Tool call finished (tool_name, tool_call_id, arguments = full JSON string)
+    - toolcall_end: Tool call finished
+      (tool_name, tool_call_id, arguments = full JSON string)
     - usage: Token usage update (usage dict)
     - done: Stream completed (finish_reason)
     - error: Stream error (error message)
     """
+
     type: str
     content_index: int = 0
     delta: str = ""
@@ -30,5 +32,5 @@ class StreamEvent:
     tool_call_id: str = ""
     arguments: str = ""
     finish_reason: str = ""
-    usage: Dict[str, Any] = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
     error: str = ""

@@ -3,7 +3,6 @@
 import asyncio
 import json
 import signal
-import time
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
@@ -15,6 +14,7 @@ from koi.sandbox import Sandbox
 from koi.tools import ToolExecutor
 
 # ── helpers ──
+
 
 def _make_sandbox(tmpdir: str, blocked_patterns=None):
     td = Path(tmpdir)
@@ -41,6 +41,7 @@ def _make_tool_call(name: str, arguments: dict) -> dict:
 
 # ── ToolExecutor: CancelledError propagation ──
 
+
 async def test_cancelled_error_propagates_from_tool_executor():
     """execute_tool must re-raise CancelledError, not swallow it."""
     executor = ToolExecutor(Mock())
@@ -59,6 +60,7 @@ async def test_cancelled_error_propagates_from_tool_executor():
 
 # ── Subprocess cancellation ──
 
+
 async def test_ctrl_c_kills_subprocess():
     """Cancelling during _exec_command should terminate the subprocess."""
     with TemporaryDirectory() as tmpdir:
@@ -66,9 +68,7 @@ async def test_ctrl_c_kills_subprocess():
         executor = ToolExecutor(Mock(), sandbox)
 
         # Start a long-running command, then cancel almost immediately
-        task = asyncio.create_task(
-            executor._exec_command("sleep 60", timeout=120)
-        )
+        task = asyncio.create_task(executor._exec_command("sleep 60", timeout=120))
         # Give the subprocess a moment to start
         await asyncio.sleep(0.1)
         task.cancel()
@@ -89,6 +89,7 @@ async def test_subprocess_timeout_still_works():
 
 
 # ── LLM client: CancelledError propagation ──
+
 
 async def test_cancelled_error_propagates_from_llm_client():
     """LLMClient.chat() must re-raise CancelledError."""
@@ -119,6 +120,7 @@ async def test_cancelled_error_propagates_from_llm_client():
 
 # ── Agent: message rollback on cancellation ──
 
+
 async def test_ctrl_c_cancels_llm_call():
     """Cancelling during LLM call should roll back messages."""
     from koi.agent import Agent
@@ -147,9 +149,7 @@ async def test_ctrl_c_cancels_llm_call():
 
     # Add user message and start agent loop
     agent.messages.append({"role": "user", "content": "do something"})
-    agent._current_task = asyncio.create_task(
-        agent._agent_loop(non_interactive=True)
-    )
+    agent._current_task = asyncio.create_task(agent._agent_loop(non_interactive=True))
     # Wait just enough for the snapshot to be set
     await asyncio.sleep(0.05)
     agent._current_task.cancel()
@@ -194,19 +194,23 @@ async def test_ctrl_c_cancels_tool_execution():
         nonlocal call_count
         call_count += 1
         return {
-            "choices": [{
-                "message": {
-                    "role": "assistant",
-                    "tool_calls": [{
-                        "id": "call_1",
-                        "function": {
-                            "name": "exec_command",
-                            "arguments": json.dumps({"command": "sleep 60"})
-                        }
-                    }]
-                },
-                "finish_reason": "tool_calls"
-            }]
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "function": {
+                                    "name": "exec_command",
+                                    "arguments": json.dumps({"command": "sleep 60"}),
+                                },
+                            }
+                        ],
+                    },
+                    "finish_reason": "tool_calls",
+                }
+            ]
         }
 
     async def _hang_tool(tool_call):
@@ -218,9 +222,7 @@ async def test_ctrl_c_cancels_tool_execution():
     agent.messages.append({"role": "user", "content": "run a command"})
     snapshot_before = len(agent.messages)
 
-    agent._current_task = asyncio.create_task(
-        agent._agent_loop(non_interactive=True)
-    )
+    agent._current_task = asyncio.create_task(agent._agent_loop(non_interactive=True))
     await asyncio.sleep(0.05)
     agent._current_task.cancel()
 
@@ -265,19 +267,23 @@ async def test_message_rollback_preserves_completed_iterations():
         if call_count == 1:
             # First call: return a tool call
             return {
-                "choices": [{
-                    "message": {
-                        "role": "assistant",
-                        "tool_calls": [{
-                            "id": "call_1",
-                            "function": {
-                                "name": "web_search",
-                                "arguments": json.dumps({"query": "test"})
-                            }
-                        }]
-                    },
-                    "finish_reason": "tool_calls"
-                }]
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "function": {
+                                        "name": "web_search",
+                                        "arguments": json.dumps({"query": "test"}),
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ]
             }
         else:
             # Second call: hang (will be cancelled)
@@ -292,9 +298,7 @@ async def test_message_rollback_preserves_completed_iterations():
     agent.messages.append({"role": "user", "content": "search something"})
     user_msg_index = len(agent.messages) - 1
 
-    agent._current_task = asyncio.create_task(
-        agent._agent_loop(non_interactive=True)
-    )
+    agent._current_task = asyncio.create_task(agent._agent_loop(non_interactive=True))
     # Wait for first iteration to complete and second to start
     await asyncio.sleep(0.1)
     agent._current_task.cancel()
@@ -313,14 +317,14 @@ async def test_message_rollback_preserves_completed_iterations():
     assert len(agent.messages) > user_msg_index + 1
     # The assistant message with tool_calls from iteration 1 should be there
     assert any(
-        m.get("role") == "assistant" and m.get("tool_calls")
-        for m in agent.messages
+        m.get("role") == "assistant" and m.get("tool_calls") for m in agent.messages
     )
 
     await agent.llm_client.close()
 
 
 # ── Double Ctrl+C / force exit ──
+
 
 def _make_agent():
     """Helper to create a non-interactive Agent with mocked config."""
@@ -351,9 +355,7 @@ async def test_double_ctrl_c_force_exit():
 
     agent.llm_client.chat = _hang_chat
     agent.messages.append({"role": "user", "content": "test"})
-    agent._current_task = asyncio.create_task(
-        agent._agent_loop(non_interactive=True)
-    )
+    agent._current_task = asyncio.create_task(agent._agent_loop(non_interactive=True))
     await asyncio.sleep(0.05)
 
     with patch.object(agent, "_force_exit") as mock_force_exit:
@@ -421,8 +423,9 @@ async def test_single_ctrl_c_then_delayed_second():
 
 async def test_atexit_kills_subprocesses():
     """force_kill_all_sync should kill active subprocess runs."""
-    from koi.subagent import SubagentManager, SubagentRun
     from datetime import datetime
+
+    from koi.subagent import SubagentManager, SubagentRun
 
     config = Mock()
     mgr = SubagentManager(config)

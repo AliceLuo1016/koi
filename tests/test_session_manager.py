@@ -1,9 +1,8 @@
 """Tests for SessionManager."""
 
 import json
+
 import pytest
-from pathlib import Path
-from unittest.mock import patch
 
 from koi.session_manager import SessionManager
 
@@ -69,7 +68,16 @@ class TestSaveAndLoad:
 
         assistant_msg = {
             "role": "assistant",
-            "tool_calls": [{"id": "tc1", "type": "function", "function": {"name": "read_file", "arguments": '{"path": "/tmp/x"}'}}],
+            "tool_calls": [
+                {
+                    "id": "tc1",
+                    "type": "function",
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "/tmp/x"}',
+                    },
+                }
+            ],
         }
         tool_result = {
             "role": "tool",
@@ -161,7 +169,7 @@ class TestGetLatestSession:
         sm1 = SessionManager(koi_dir)
         sm1.start_session(model="model-1")
         sm1.close()
-        path1 = sm1.session_path
+        sm1.session_path
 
         sm2 = SessionManager(koi_dir)
         sm2.start_session(model="model-2")
@@ -194,7 +202,9 @@ class TestResumeSession:
         assert data["messages"][1]["content"] == "Hi!"
 
     def test_resume_nonexistent_raises(self, koi_dir):
-        sm = SessionManager(koi_dir, session_path=koi_dir / "sessions" / "nonexistent.jsonl")
+        sm = SessionManager(
+            koi_dir, session_path=koi_dir / "sessions" / "nonexistent.jsonl"
+        )
         with pytest.raises(FileNotFoundError):
             sm.resume_session()
 
@@ -209,7 +219,7 @@ class TestEntryIds:
 
         # Read raw JSONL
         with open(sm.session_path) as f:
-            lines = [json.loads(l) for l in f if l.strip()]
+            lines = [json.loads(line) for line in f if line.strip()]
 
         # Header has no id/parentId added by _write_entry
         assert lines[0]["type"] == "session"
@@ -241,11 +251,19 @@ class TestForkSession:
 
         # Read raw to find the branch
         with open(sm.session_path) as f:
-            entries = [json.loads(l) for l in f if l.strip()]
+            entries = [json.loads(line) for line in f if line.strip()]
 
         non_header = [e for e in entries if e.get("type") != "session"]
-        branch_a_entry = [e for e in non_header if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-a"][0]
-        branch_b_entry = [e for e in non_header if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-b"][0]
+        branch_a_entry = [
+            e
+            for e in non_header
+            if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-a"
+        ][0]
+        branch_b_entry = [
+            e
+            for e in non_header
+            if e.get("type") == "message" and e["message"]["content"] == "msg2-branch-b"
+        ][0]
 
         assert branch_a_entry["parentId"] == fork_point
         assert branch_b_entry["parentId"] == fork_point
@@ -260,12 +278,33 @@ class TestForkSession:
 
     def test_load_v1_session_without_ids(self, koi_dir):
         """V1 sessions without id/parentId load correctly."""
-        sm = SessionManager(koi_dir)
+        SessionManager(koi_dir)
         # Manually create a V1 session file (no id/parentId)
         session_path = koi_dir / "sessions" / "test_v1.jsonl"
         with open(session_path, "w") as f:
-            f.write(json.dumps({"type": "session", "version": 1, "id": "test", "timestamp": "2026-01-01", "cwd": "/tmp", "model": "test"}) + "\n")
-            f.write(json.dumps({"type": "message", "timestamp": "2026-01-01", "message": {"role": "user", "content": "old msg"}}) + "\n")
+            f.write(
+                json.dumps(
+                    {
+                        "type": "session",
+                        "version": 1,
+                        "id": "test",
+                        "timestamp": "2026-01-01",
+                        "cwd": "/tmp",
+                        "model": "test",
+                    }
+                )
+                + "\n"
+            )
+            f.write(
+                json.dumps(
+                    {
+                        "type": "message",
+                        "timestamp": "2026-01-01",
+                        "message": {"role": "user", "content": "old msg"},
+                    }
+                )
+                + "\n"
+            )
 
         sm2 = SessionManager(koi_dir, session_path=session_path)
         data = sm2.load_session()

@@ -10,7 +10,6 @@ import pytest
 from koi.config import Config
 from koi.llm import LLMClient
 
-
 # ── Fixtures ──
 
 
@@ -55,6 +54,7 @@ def responses_client():
 
 def _make_fake_post(captured):
     """Return an async fake_post that captures the payload."""
+
     async def fake_post(url, headers=None, json=None):
         captured.update(json or {})
         mock_resp = MagicMock()
@@ -65,6 +65,7 @@ def _make_fake_post(captured):
             "stop_reason": "end_turn",
         }
         return mock_resp
+
     return fake_post
 
 
@@ -89,7 +90,9 @@ async def test_system_prompt_array_with_cache_control(anthropic_client):
     assert system[0]["cache_control"] == {"type": "ephemeral"}
 
 
-async def test_system_prompt_plain_string_when_cache_disabled(anthropic_client_no_cache):
+async def test_system_prompt_plain_string_when_cache_disabled(
+    anthropic_client_no_cache,
+):
     """When caching disabled, system prompt remains a plain string."""
     captured = {}
     anthropic_client_no_cache.client.post = _make_fake_post(captured)
@@ -123,7 +126,8 @@ async def test_cache_control_format(anthropic_client):
 
 
 async def test_last_tool_result_gets_cache_control(anthropic_client):
-    """The last user message with tool_result content gets cache_control on its last block."""
+    """The last user message with tool_result content gets
+    cache_control on its last block."""
     captured = {}
     anthropic_client.client.post = _make_fake_post(captured)
 
@@ -132,11 +136,13 @@ async def test_last_tool_result_gets_cache_control(anthropic_client):
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{
-                "id": "call_1",
-                "type": "function",
-                "function": {"name": "read_file", "arguments": '{"path": "x.py"}'},
-            }],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "x.py"}'},
+                }
+            ],
         },
         {"role": "tool", "tool_call_id": "call_1", "content": "file contents"},
         {"role": "assistant", "content": "Here's the file."},
@@ -146,7 +152,8 @@ async def test_last_tool_result_gets_cache_control(anthropic_client):
 
     # Find the user message with tool_result content
     tool_result_msgs = [
-        m for m in captured["messages"]
+        m
+        for m in captured["messages"]
         if m.get("role") == "user"
         and isinstance(m.get("content"), list)
         and any(b.get("type") == "tool_result" for b in m["content"])
@@ -167,22 +174,26 @@ async def test_multiple_tool_results_only_last_gets_cache_control(anthropic_clie
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{
-                "id": "call_1",
-                "type": "function",
-                "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
-            }],
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "a.py"}'},
+                }
+            ],
         },
         {"role": "tool", "tool_call_id": "call_1", "content": "contents of a"},
         # Second tool use cycle
         {
             "role": "assistant",
             "content": None,
-            "tool_calls": [{
-                "id": "call_2",
-                "type": "function",
-                "function": {"name": "read_file", "arguments": '{"path": "b.py"}'},
-            }],
+            "tool_calls": [
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path": "b.py"}'},
+                }
+            ],
         },
         {"role": "tool", "tool_call_id": "call_2", "content": "contents of b"},
     ]
@@ -190,7 +201,8 @@ async def test_multiple_tool_results_only_last_gets_cache_control(anthropic_clie
 
     # Find all user messages with tool_result content
     tool_result_msgs = [
-        m for m in captured["messages"]
+        m
+        for m in captured["messages"]
         if m.get("role") == "user"
         and isinstance(m.get("content"), list)
         and any(b.get("type") == "tool_result" for b in m["content"])
@@ -266,11 +278,15 @@ def test_config_load_defaults_prompt_caching_when_missing():
     with TemporaryDirectory() as tmpdir:
         config_path = Path(tmpdir) / "config.json"
         # Write a config without prompt_caching
-        config_path.write_text(json.dumps({
-            "api_base": "https://api.example.com",
-            "api_key": "test",
-            "model": "test-model",
-        }))
+        config_path.write_text(
+            json.dumps(
+                {
+                    "api_base": "https://api.example.com",
+                    "api_key": "test",
+                    "model": "test-model",
+                }
+            )
+        )
 
         loaded = Config.load(config_path)
         assert loaded.prompt_caching is True
@@ -328,7 +344,12 @@ async def test_chat_completions_format_unaffected():
         mock_resp.raise_for_status = lambda: None
         mock_resp.json.return_value = {
             "id": "r",
-            "choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": "stop",
+                }
+            ],
         }
         return mock_resp
 
@@ -366,8 +387,10 @@ async def test_streaming_anthropic_applies_cache_control():
     class _StreamCtx:
         def __init__(self):
             self._resp = _MockStreamResp()
+
         async def __aenter__(self):
             return self._resp
+
         async def __aexit__(self, *_):
             pass
 
@@ -375,10 +398,15 @@ async def test_streaming_anthropic_applies_cache_control():
         def __init__(self):
             self.status_code = 200
             self.headers = {}
+
         def raise_for_status(self):
             pass
+
         async def aiter_lines(self):
-            yield 'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "hi"}}'
+            yield (
+                'data: {"type": "content_block_delta", '
+                '"delta": {"type": "text_delta", "text": "hi"}}'
+            )
             yield 'data: {"type": "message_stop"}'
 
     def capture_stream(*a, **kw):
@@ -409,16 +437,19 @@ async def test_no_system_prompt_with_caching(anthropic_client):
     captured = {}
     anthropic_client.client.post = _make_fake_post(captured)
 
-    await anthropic_client.chat([
-        {"role": "user", "content": "Hi"},
-    ])
+    await anthropic_client.chat(
+        [
+            {"role": "user", "content": "Hi"},
+        ]
+    )
 
     # No system prompt means no system key in payload
     assert "system" not in captured
 
 
 async def test_grouped_tool_results_cache_on_last_block(anthropic_client):
-    """Multiple consecutive tool results grouped into one user msg — cache_control on last block."""
+    """Multiple consecutive tool results grouped into one user msg --
+    cache_control on last block."""
     captured = {}
     anthropic_client.client.post = _make_fake_post(captured)
 
@@ -447,7 +478,8 @@ async def test_grouped_tool_results_cache_on_last_block(anthropic_client):
 
     # Both tool results are grouped into one user message
     tool_user_msgs = [
-        m for m in captured["messages"]
+        m
+        for m in captured["messages"]
         if m.get("role") == "user"
         and isinstance(m.get("content"), list)
         and any(b.get("type") == "tool_result" for b in m["content"])

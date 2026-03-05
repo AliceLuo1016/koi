@@ -3,14 +3,18 @@
 import asyncio
 import json
 import re
-from typing import List, Dict, Any, Optional, AsyncGenerator
+from collections.abc import AsyncGenerator
+from typing import Any
+
 import httpx
 
 from .config import Config
 from .errors import (
-    KoiAPIError, KoiRateLimitError, KoiAuthError, KoiBillingError,
-    KoiOverloadedError, KoiServerError, KoiContextOverflowError,
-    KoiConnectionError, classify_http_error, extract_retry_delay,
+    KoiAPIError,
+    KoiConnectionError,
+    KoiRateLimitError,
+    classify_http_error,
+    extract_retry_delay,
 )
 from .stream_events import StreamEvent
 from .usage import TokenUsage
@@ -57,7 +61,8 @@ def _adjust_max_tokens_for_thinking(
     """Adjust max_tokens so it covers both thinking budget and output.
 
     Returns (max_tokens, budget) where max_tokens = min(base_max + budget, model_max).
-    If the resulting max_tokens would leave no room for output (i.e. max_tokens <= budget),
+    If the resulting max_tokens would leave no room for output
+    (i.e. max_tokens <= budget),
     the budget is reduced to reserve at least 1024 tokens for output.
     """
     max_tokens = min(base_max + budget, model_max)
@@ -149,9 +154,11 @@ class LLMClient:
         self.config = config
         self.client = httpx.AsyncClient(timeout=httpx.Timeout(120.0))
         self._thinking_disabled_fallback = False
-        self._active_stream_response: Optional[httpx.Response] = None  # for abort on Ctrl+C
+        # For abort on Ctrl+C
+        self._active_stream_response: httpx.Response | None = None
         self.usage = TokenUsage()
-        self._stream_include_usage = True  # try stream_options.include_usage; disable on error
+        # try stream_options.include_usage; disable on error
+        self._stream_include_usage = True
         self.use_reasoning_tags = uses_reasoning_tags(
             config.model, config.api_format, config.thinking_level
         )
@@ -182,7 +189,7 @@ class LLMClient:
     # ── Format conversion helpers ──
 
     def _convert_messages_to_input(
-        self, messages: List[Dict[str, Any]], system_prompt: Optional[str] = None
+        self, messages: list[dict[str, Any]], system_prompt: str | None = None
     ) -> tuple:
         """Convert Chat Completions messages → (instructions, input).
 
@@ -193,70 +200,80 @@ class LLMClient:
         The system prompt is passed in separately — it is never extracted
         from the messages array.
         """
-        input_items: List[Dict[str, Any]] = []
+        input_items: list[dict[str, Any]] = []
 
         # Inject system prompt as a developer message so proxies that
         # ignore the 'instructions' field still see it.
         if system_prompt:
-            input_items.append({
-                "role": "developer",
-                "content": system_prompt,
-            })
+            input_items.append(
+                {
+                    "role": "developer",
+                    "content": system_prompt,
+                }
+            )
 
         for msg in messages:
             role = msg.get("role")
 
             if role == "user":
-                input_items.append({
-                    "role": "user",
-                    "content": msg.get("content", ""),
-                })
+                input_items.append(
+                    {
+                        "role": "user",
+                        "content": msg.get("content", ""),
+                    }
+                )
 
             elif role == "assistant":
                 content = msg.get("content")
                 if content:
-                    input_items.append({
-                        "role": "assistant",
-                        "content": content,
-                    })
+                    input_items.append(
+                        {
+                            "role": "assistant",
+                            "content": content,
+                        }
+                    )
 
                 # Tool calls → function_call items
                 for tc in msg.get("tool_calls", []):
-                    input_items.append({
-                        "type": "function_call",
-                        "call_id": tc["id"],
-                        "name": tc["function"]["name"],
-                        "arguments": tc["function"]["arguments"],
-                    })
+                    input_items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": tc["id"],
+                            "name": tc["function"]["name"],
+                            "arguments": tc["function"]["arguments"],
+                        }
+                    )
 
             elif role == "tool":
-                input_items.append({
-                    "type": "function_call_output",
-                    "call_id": msg.get("tool_call_id", ""),
-                    "output": msg.get("content", ""),
-                })
+                input_items.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": msg.get("tool_call_id", ""),
+                        "output": msg.get("content", ""),
+                    }
+                )
 
         return system_prompt, input_items
 
-    def _convert_tools(
-        self, tools: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+    def _convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Flatten Chat Completions tool defs → Responses API format."""
         converted = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                converted.append({
-                    "type": "function",
-                    "name": func["name"],
-                    "description": func.get("description", ""),
-                    "parameters": func.get("parameters", {}),
-                })
+                converted.append(
+                    {
+                        "type": "function",
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {}),
+                    }
+                )
             else:
                 converted.append(tool)
         return converted
 
-    def _extract_usage(self, data: Dict[str, Any], fmt: str = "responses") -> None:
+    def _extract_usage(self, data: dict[str, Any], fmt: str = "responses") -> None:
         """Extract token usage from an API response dict."""
         usage = data.get("usage", {})
         if not usage:
@@ -280,13 +297,13 @@ class LLMClient:
                 output_t=usage.get("output_tokens", 0),
             )
 
-    def _convert_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Convert Responses API response → Chat Completions format."""
         self._extract_usage(data, "responses")
         output = data.get("output", [])
 
-        content_parts: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
+        content_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
 
         for item in output:
             item_type = item.get("type")
@@ -297,16 +314,18 @@ class LLMClient:
                         content_parts.append(part.get("text", ""))
 
             elif item_type == "function_call":
-                tool_calls.append({
-                    "id": item.get("call_id", item.get("id", "")),
-                    "type": "function",
-                    "function": {
-                        "name": item.get("name", ""),
-                        "arguments": item.get("arguments", "{}"),
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": item.get("call_id", item.get("id", "")),
+                        "type": "function",
+                        "function": {
+                            "name": item.get("name", ""),
+                            "arguments": item.get("arguments", "{}"),
+                        },
+                    }
+                )
 
-        message: Dict[str, Any] = {"role": "assistant"}
+        message: dict[str, Any] = {"role": "assistant"}
         if content_parts:
             message["content"] = "".join(content_parts)
         if tool_calls:
@@ -321,11 +340,11 @@ class LLMClient:
 
     def _build_cc_payload(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
         """Build a Chat Completions API payload.
 
         The system prompt is prepended as messages[0] only in the payload,
@@ -334,7 +353,7 @@ class LLMClient:
         payload_messages = list(messages)
         if system_prompt:
             payload_messages.insert(0, {"role": "system", "content": system_prompt})
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": payload_messages,
             "max_tokens": self.config.max_tokens,
@@ -347,14 +366,14 @@ class LLMClient:
             payload["stream"] = True
             if self._stream_include_usage:
                 payload["stream_options"] = {"include_usage": True}
-        # Add reasoning_effort for Chat Completions providers (only if model supports it)
+        # Add reasoning_effort for CC providers (if supported)
         if self._should_send_thinking():
             effort = _CC_REASONING_EFFORT.get(self.config.thinking_level)
             if effort:
                 payload["reasoning_effort"] = effort
         return payload
 
-    def _convert_cc_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_cc_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Normalize a Chat Completions response (mostly passthrough)."""
         self._extract_usage(data, "chat_completions")
         return data
@@ -362,7 +381,7 @@ class LLMClient:
     # ── Anthropic Messages API helpers ──
 
     def _convert_messages_to_anthropic(
-        self, messages: List[Dict[str, Any]], system_prompt: Optional[str] = None
+        self, messages: list[dict[str, Any]], system_prompt: str | None = None
     ) -> tuple:
         """Convert Chat Completions messages → (system, anthropic_messages).
 
@@ -370,7 +389,7 @@ class LLMClient:
         The system prompt is passed in separately — it is never extracted
         from the messages array.
         """
-        anthropic_msgs: List[Dict[str, Any]] = []
+        anthropic_msgs: list[dict[str, Any]] = []
 
         i = 0
         while i < len(messages):
@@ -378,13 +397,15 @@ class LLMClient:
             role = msg.get("role")
 
             if role == "user":
-                anthropic_msgs.append({
-                    "role": "user",
-                    "content": msg.get("content", ""),
-                })
+                anthropic_msgs.append(
+                    {
+                        "role": "user",
+                        "content": msg.get("content", ""),
+                    }
+                )
 
             elif role == "assistant":
-                content_blocks: List[Dict[str, Any]] = []
+                content_blocks: list[dict[str, Any]] = []
                 text = msg.get("content")
                 if text:
                     content_blocks.append({"type": "text", "text": text})
@@ -396,33 +417,41 @@ class LLMClient:
                             arguments = json.loads(arguments)
                         except (json.JSONDecodeError, TypeError):
                             arguments = {}
-                    content_blocks.append({
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["function"]["name"],
-                        "input": arguments,
-                    })
+                    content_blocks.append(
+                        {
+                            "type": "tool_use",
+                            "id": tc["id"],
+                            "name": tc["function"]["name"],
+                            "input": arguments,
+                        }
+                    )
 
                 if content_blocks:
-                    anthropic_msgs.append({
-                        "role": "assistant",
-                        "content": content_blocks,
-                    })
+                    anthropic_msgs.append(
+                        {
+                            "role": "assistant",
+                            "content": content_blocks,
+                        }
+                    )
 
             elif role == "tool":
-                tool_results: List[Dict[str, Any]] = []
+                tool_results: list[dict[str, Any]] = []
                 while i < len(messages) and messages[i].get("role") == "tool":
                     tool_msg = messages[i]
-                    tool_results.append({
-                        "type": "tool_result",
-                        "tool_use_id": tool_msg.get("tool_call_id", ""),
-                        "content": tool_msg.get("content", ""),
-                    })
+                    tool_results.append(
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": tool_msg.get("tool_call_id", ""),
+                            "content": tool_msg.get("content", ""),
+                        }
+                    )
                     i += 1
-                anthropic_msgs.append({
-                    "role": "user",
-                    "content": tool_results,
-                })
+                anthropic_msgs.append(
+                    {
+                        "role": "user",
+                        "content": tool_results,
+                    }
+                )
                 continue  # skip the i += 1 at end
 
             i += 1
@@ -430,30 +459,32 @@ class LLMClient:
         return system_prompt, anthropic_msgs
 
     def _convert_anthropic_tools(
-        self, tools: List[Dict[str, Any]]
-    ) -> List[Dict[str, Any]]:
+        self, tools: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         """Convert OpenAI tool defs → Anthropic tool format."""
         converted = []
         for tool in tools:
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                converted.append({
-                    "name": func["name"],
-                    "description": func.get("description", ""),
-                    "input_schema": func.get("parameters", {"type": "object"}),
-                })
+                converted.append(
+                    {
+                        "name": func["name"],
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {"type": "object"}),
+                    }
+                )
             else:
                 converted.append(tool)
         return converted
 
-    def _convert_anthropic_response(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_anthropic_response(self, data: dict[str, Any]) -> dict[str, Any]:
         """Convert Anthropic Messages response → Chat Completions format.
 
         Thinking blocks (type=='thinking') are stripped from the output.
         """
         self._extract_usage(data, "anthropic")
-        content_parts: List[str] = []
-        tool_calls: List[Dict[str, Any]] = []
+        content_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
 
         for block in data.get("content", []):
             block_type = block.get("type")
@@ -463,16 +494,18 @@ class LLMClient:
             if block_type == "text":
                 content_parts.append(block.get("text", ""))
             elif block_type == "tool_use":
-                tool_calls.append({
-                    "id": block.get("id", ""),
-                    "type": "function",
-                    "function": {
-                        "name": block.get("name", ""),
-                        "arguments": json.dumps(block.get("input", {})),
-                    },
-                })
+                tool_calls.append(
+                    {
+                        "id": block.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name", ""),
+                            "arguments": json.dumps(block.get("input", {})),
+                        },
+                    }
+                )
 
-        message: Dict[str, Any] = {"role": "assistant"}
+        message: dict[str, Any] = {"role": "assistant"}
         if content_parts:
             message["content"] = "".join(content_parts)
         if tool_calls:
@@ -480,63 +513,93 @@ class LLMClient:
 
         return {
             "id": data.get("id", ""),
-            "choices": [{"message": message, "finish_reason": data.get("stop_reason", "stop")}],
+            "choices": [
+                {
+                    "message": message,
+                    "finish_reason": data.get("stop_reason", "stop"),
+                }
+            ],
         }
 
     # ── API calls ──
 
     async def chat(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
         """Send a chat request using the configured API format."""
         if self.config.api_format == "anthropic":
-            return await self._chat_anthropic(messages, tools, stream, system_prompt=system_prompt)
+            return await self._chat_anthropic(
+                messages,
+                tools,
+                stream,
+                system_prompt=system_prompt,
+            )
         if self.config.api_format == "chat_completions":
-            return await self._chat_completions(messages, tools, stream, system_prompt=system_prompt)
-        return await self._chat_responses(messages, tools, stream, system_prompt=system_prompt)
+            return await self._chat_completions(
+                messages,
+                tools,
+                stream,
+                system_prompt=system_prompt,
+            )
+        return await self._chat_responses(
+            messages,
+            tools,
+            stream,
+            system_prompt=system_prompt,
+        )
 
     async def _chat_responses(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
         """Send a request to the Responses API."""
         if stream:
             full_content = ""
-            tool_calls: Dict[str, Dict[str, Any]] = {}
-            async for event in self._stream_responses_events(messages, tools, system_prompt=system_prompt):
+            tool_calls: dict[str, dict[str, Any]] = {}
+            async for event in self._stream_responses_events(
+                messages,
+                tools,
+                system_prompt=system_prompt,
+            ):
                 if event.type == "text_delta":
                     full_content += event.delta
                 elif event.type == "toolcall_start":
                     cid = event.tool_call_id
                     tool_calls[cid] = {
-                        "id": cid, "type": "function",
-                        "function": {"name": event.tool_name, "arguments": ""},
+                        "id": cid,
+                        "type": "function",
+                        "function": {
+                            "name": event.tool_name,
+                            "arguments": "",
+                        },
                     }
                 elif event.type == "toolcall_delta":
-                    # Find the most recent tool call to append to
+                    # Find the most recent tool call to append
                     for tc in reversed(list(tool_calls.values())):
                         tc["function"]["arguments"] += event.delta
                         break
                 elif event.type == "usage":
                     self._extract_usage_from_event(event)
 
-            message: Dict[str, Any] = {"role": "assistant"}
+            message: dict[str, Any] = {"role": "assistant"}
             if full_content:
                 message["content"] = full_content
             if tool_calls:
                 message["tool_calls"] = list(tool_calls.values())
             return {"choices": [{"message": message, "finish_reason": "stop"}]}
 
-        instructions, input_items = self._convert_messages_to_input(messages, system_prompt=system_prompt)
+        instructions, input_items = self._convert_messages_to_input(
+            messages, system_prompt=system_prompt
+        )
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "input": input_items,
             "max_output_tokens": self.config.max_tokens,
@@ -561,8 +624,8 @@ class LLMClient:
 
     def _apply_prompt_caching(
         self,
-        system_prompt: Optional[str],
-        anthropic_msgs: List[Dict[str, Any]],
+        system_prompt: str | None,
+        anthropic_msgs: list[dict[str, Any]],
     ) -> tuple:
         """Apply Anthropic prompt caching to system prompt and last tool result.
 
@@ -598,18 +661,20 @@ class LLMClient:
 
     async def _chat_anthropic(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
         """Send a request to the Anthropic Messages API."""
-        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(messages, system_prompt=system_prompt)
+        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(
+            messages, system_prompt=system_prompt
+        )
         system_value, anthropic_msgs = self._apply_prompt_caching(
             system_prompt, anthropic_msgs
         )
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": anthropic_msgs,
             "max_tokens": self.config.max_tokens,
@@ -645,9 +710,13 @@ class LLMClient:
         if stream:
             # Consume events directly — no separate _stream_anthropic method needed
             full_content = ""
-            tool_calls: Dict[int, Dict[str, Any]] = {}
+            tool_calls: dict[int, dict[str, Any]] = {}
 
-            async for event in self._stream_anthropic_events(messages, tools, system_prompt=system_prompt):
+            async for event in self._stream_anthropic_events(
+                messages,
+                tools,
+                system_prompt=system_prompt,
+            ):
                 if event.type == "text_delta":
                     full_content += event.delta
                 elif event.type == "toolcall_start":
@@ -667,57 +736,69 @@ class LLMClient:
                 elif event.type == "usage":
                     self._extract_usage_from_event(event)
 
-            message: Dict[str, Any] = {"role": "assistant"}
+            message: dict[str, Any] = {"role": "assistant"}
             if full_content:
                 message["content"] = full_content
             if tool_calls:
-                message["tool_calls"] = [
-                    tool_calls[i] for i in sorted(tool_calls)
-                ]
+                message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
 
-            return {
-                "choices": [{"message": message, "finish_reason": "stop"}]
-            }
+            return {"choices": [{"message": message, "finish_reason": "stop"}]}
 
-        return await self._post_with_retries(url, payload, self._convert_anthropic_response)
+        return await self._post_with_retries(
+            url, payload, self._convert_anthropic_response
+        )
 
     async def _chat_completions(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
         stream: bool = False,
-        system_prompt: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        system_prompt: str | None = None,
+    ) -> dict[str, Any]:
         """Send a request to a Chat Completions API endpoint."""
         if stream:
             full_content = ""
-            tool_calls: Dict[int, Dict[str, Any]] = {}
-            async for event in self._stream_cc_events(messages, tools, system_prompt=system_prompt):
+            tool_calls: dict[int, dict[str, Any]] = {}
+            async for event in self._stream_cc_events(
+                messages,
+                tools,
+                system_prompt=system_prompt,
+            ):
                 if event.type == "text_delta":
                     full_content += event.delta
                 elif event.type == "toolcall_start":
                     tool_calls[event.content_index] = {
-                        "id": event.tool_call_id, "type": "function",
-                        "function": {"name": event.tool_name, "arguments": ""},
+                        "id": event.tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": event.tool_name,
+                            "arguments": "",
+                        },
                     }
                 elif event.type == "toolcall_delta":
-                    if event.content_index in tool_calls:
-                        tool_calls[event.content_index]["function"]["arguments"] += event.delta
+                    idx = event.content_index
+                    if idx in tool_calls:
+                        tool_calls[idx]["function"]["arguments"] += event.delta
                 elif event.type == "usage":
                     self._extract_usage_from_event(event)
 
-            message: Dict[str, Any] = {"role": "assistant"}
+            message: dict[str, Any] = {"role": "assistant"}
             if full_content:
                 message["content"] = full_content
             if tool_calls:
                 message["tool_calls"] = [tool_calls[i] for i in sorted(tool_calls)]
             return {"choices": [{"message": message, "finish_reason": "stop"}]}
 
-        payload = self._build_cc_payload(messages, tools, stream, system_prompt=system_prompt)
+        payload = self._build_cc_payload(
+            messages,
+            tools,
+            stream,
+            system_prompt=system_prompt,
+        )
         url = self.config.api_base.rstrip("/")
         return await self._post_with_retries(url, payload, self._convert_cc_response)
 
-    def _strip_thinking_params(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    def _strip_thinking_params(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Return a copy of payload with all thinking/reasoning params removed."""
         cleaned = dict(payload)
         cleaned.pop("thinking", None)
@@ -728,9 +809,9 @@ class LLMClient:
     async def _post_with_retries(
         self,
         url: str,
-        payload: Dict[str, Any],
+        payload: dict[str, Any],
         convert_fn,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """POST with exponential-backoff retries, then convert the response."""
         last_error = None
         for attempt in range(self.MAX_RETRIES):
@@ -772,13 +853,19 @@ class LLMClient:
                 # Check max retry delay cap
                 if retry_delay and retry_delay > self.MAX_RETRY_DELAY:
                     raise KoiRateLimitError(
-                        f"Rate limited — server wants {retry_delay:.0f}s wait (max: {self.MAX_RETRY_DELAY}s)",
+                        f"Rate limited — server wants "
+                        f"{retry_delay:.0f}s wait "
+                        f"(max: {self.MAX_RETRY_DELAY}s)",
                         status_code=e.response.status_code,
                         error_text=error_text,
                         retry_after=retry_delay,
                     )
 
-                delay = retry_delay if retry_delay else min(2 ** (attempt + 1), self.MAX_BACKOFF)
+                delay = (
+                    retry_delay
+                    if retry_delay
+                    else min(2 ** (attempt + 1), self.MAX_BACKOFF)
+                )
                 await asyncio.sleep(delay)
 
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
@@ -800,12 +887,11 @@ class LLMClient:
             raise last_error
         raise KoiAPIError("Request failed after retries", retryable=False)
 
-
     async def stream_chat(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system_prompt: Optional[str] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Yield StreamEvent objects from a streaming LLM response.
 
@@ -813,20 +899,32 @@ class LLMClient:
         tool calls, and assembling the final response dict.
         """
         if self.config.api_format == "anthropic":
-            async for event in self._stream_anthropic_events(messages, tools, system_prompt=system_prompt):
+            async for event in self._stream_anthropic_events(
+                messages,
+                tools,
+                system_prompt=system_prompt,
+            ):
                 yield event
         elif self.config.api_format == "chat_completions":
-            async for event in self._stream_cc_events(messages, tools, system_prompt=system_prompt):
+            async for event in self._stream_cc_events(
+                messages,
+                tools,
+                system_prompt=system_prompt,
+            ):
                 yield event
         else:
-            async for event in self._stream_responses_events(messages, tools, system_prompt=system_prompt):
+            async for event in self._stream_responses_events(
+                messages,
+                tools,
+                system_prompt=system_prompt,
+            ):
                 yield event
 
     async def _stream_responses_events(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system_prompt: Optional[str] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Yield StreamEvent objects from a Responses API streaming response.
 
@@ -834,9 +932,11 @@ class LLMClient:
         It handles SSE parsing and yields structured events; the consumer
         handles accumulation and response assembly.
         """
-        instructions, input_items = self._convert_messages_to_input(messages, system_prompt=system_prompt)
+        instructions, input_items = self._convert_messages_to_input(
+            messages, system_prompt=system_prompt
+        )
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "input": input_items,
             "max_output_tokens": self.config.max_tokens,
@@ -895,7 +995,10 @@ class LLMClient:
                             cid = data.get("call_id", data.get("item_id", ""))
                             if cid not in seen_call_ids:
                                 seen_call_ids.add(cid)
-                                yield StreamEvent(type="toolcall_start", tool_call_id=cid)
+                                yield StreamEvent(
+                                    type="toolcall_start",
+                                    tool_call_id=cid,
+                                )
                             arg_delta = data.get("delta", "")
                             tool_args_len += len(arg_delta)
                             yield StreamEvent(type="toolcall_delta", delta=arg_delta)
@@ -921,10 +1024,17 @@ class LLMClient:
                             if resp:
                                 usage = resp.get("usage", {})
                                 if usage:
-                                    yield StreamEvent(type="usage", usage={
-                                        "input_tokens": usage.get("input_tokens", 0),
-                                        "output_tokens": usage.get("output_tokens", 0),
-                                    })
+                                    yield StreamEvent(
+                                        type="usage",
+                                        usage={
+                                            "input_tokens": usage.get(
+                                                "input_tokens", 0
+                                            ),
+                                            "output_tokens": usage.get(
+                                                "output_tokens", 0
+                                            ),
+                                        },
+                                    )
                                 completed = True
                 finally:
                     self._active_stream_response = None
@@ -942,18 +1052,21 @@ class LLMClient:
         # Fallback usage estimation if no response.completed
         if not completed and (content_len or tool_args_len):
             estimated = content_len // 4 + tool_args_len // 4
-            yield StreamEvent(type="usage", usage={
-                "input_tokens": 0,
-                "output_tokens": max(estimated, 1),
-            })
+            yield StreamEvent(
+                type="usage",
+                usage={
+                    "input_tokens": 0,
+                    "output_tokens": max(estimated, 1),
+                },
+            )
 
         yield StreamEvent(type="done")
 
     async def _stream_cc_events(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system_prompt: Optional[str] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Yield StreamEvent objects from a Chat Completions streaming response.
 
@@ -961,7 +1074,12 @@ class LLMClient:
         It handles SSE parsing, stream_options negotiation, and yields
         structured events; the consumer handles accumulation and response assembly.
         """
-        payload = self._build_cc_payload(messages, tools, stream=True, system_prompt=system_prompt)
+        payload = self._build_cc_payload(
+            messages,
+            tools,
+            stream=True,
+            system_prompt=system_prompt,
+        )
         url = self.config.api_base.rstrip("/")
 
         # stream_options negotiation: try with include_usage; if 400, disable and retry
@@ -1016,10 +1134,15 @@ class LLMClient:
                         # Usage from final chunk
                         if "usage" in data:
                             usage = data["usage"]
-                            yield StreamEvent(type="usage", usage={
-                                "prompt_tokens": usage.get("prompt_tokens", 0),
-                                "completion_tokens": usage.get("completion_tokens", 0),
-                            })
+                            yield StreamEvent(
+                                type="usage",
+                                usage={
+                                    "prompt_tokens": usage.get("prompt_tokens", 0),
+                                    "completion_tokens": usage.get(
+                                        "completion_tokens", 0
+                                    ),
+                                },
+                            )
                             usage_found = True
 
                         choices = data.get("choices", [])
@@ -1040,7 +1163,9 @@ class LLMClient:
                                     type="toolcall_start",
                                     content_index=idx,
                                     tool_call_id=tc_delta.get("id", ""),
-                                    tool_name=tc_delta.get("function", {}).get("name", ""),
+                                    tool_name=tc_delta.get("function", {}).get(
+                                        "name", ""
+                                    ),
                                 )
                             func = tc_delta.get("function", {})
                             if func.get("arguments"):
@@ -1066,17 +1191,20 @@ class LLMClient:
         # Fallback usage estimation
         if not usage_found and (content_len or tool_args_len):
             estimated = content_len // 4 + tool_args_len // 4
-            yield StreamEvent(type="usage", usage={
-                "prompt_tokens": 0,
-                "completion_tokens": max(estimated, 1),
-            })
+            yield StreamEvent(
+                type="usage",
+                usage={
+                    "prompt_tokens": 0,
+                    "completion_tokens": max(estimated, 1),
+                },
+            )
 
         yield StreamEvent(type="done")
 
     async def _parse_cc_sse(
         self, response: httpx.Response
     ) -> AsyncGenerator[StreamEvent, None]:
-        """Parse CC SSE lines from an already-opened response into StreamEvent objects."""
+        """Parse CC SSE lines from an already-opened response."""
         content_len = 0
         tool_args_len = 0
         usage_found = False
@@ -1097,10 +1225,13 @@ class LLMClient:
 
             if "usage" in data:
                 usage = data["usage"]
-                yield StreamEvent(type="usage", usage={
-                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage.get("completion_tokens", 0),
-                })
+                yield StreamEvent(
+                    type="usage",
+                    usage={
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                    },
+                )
                 usage_found = True
 
             choices = data.get("choices", [])
@@ -1134,18 +1265,21 @@ class LLMClient:
 
         if not usage_found and (content_len or tool_args_len):
             estimated = content_len // 4 + tool_args_len // 4
-            yield StreamEvent(type="usage", usage={
-                "prompt_tokens": 0,
-                "completion_tokens": max(estimated, 1),
-            })
+            yield StreamEvent(
+                type="usage",
+                usage={
+                    "prompt_tokens": 0,
+                    "completion_tokens": max(estimated, 1),
+                },
+            )
 
         yield StreamEvent(type="done")
 
     async def _stream_anthropic_events(
         self,
-        messages: List[Dict[str, Any]],
-        tools: Optional[List[Dict[str, Any]]] = None,
-        system_prompt: Optional[str] = None,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        system_prompt: str | None = None,
     ) -> AsyncGenerator[StreamEvent, None]:
         """Yield StreamEvent objects from an Anthropic Messages streaming response.
 
@@ -1153,12 +1287,14 @@ class LLMClient:
         SSE parsing and yields structured events; the consumer handles
         accumulation and response assembly.
         """
-        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(messages, system_prompt=system_prompt)
+        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(
+            messages, system_prompt=system_prompt
+        )
         system_value, anthropic_msgs = self._apply_prompt_caching(
             system_prompt, anthropic_msgs
         )
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": anthropic_msgs,
             "max_tokens": self.config.max_tokens,
@@ -1190,10 +1326,11 @@ class LLMClient:
         url = self.config.api_base.rstrip("/")
 
         # Track accumulated content per block for *_end events
-        block_content: Dict[int, str] = {}   # index → accumulated text/thinking
-        block_args: Dict[int, str] = {}      # index → accumulated tool arguments
-        block_types: Dict[int, str] = {}     # index → "text" | "thinking" | "tool_use"
-        block_meta: Dict[int, Dict] = {}     # index → {"name": ..., "id": ...} for tool blocks
+        block_content: dict[int, str] = {}  # index → accumulated text/thinking
+        block_args: dict[int, str] = {}  # index → accumulated tool arguments
+        # index -> "text" | "thinking" | "tool_use"
+        block_types: dict[int, str] = {}
+        block_meta: dict[int, dict] = {}  # index → {name, id}
 
         try:
             async with self.client.stream(
@@ -1238,7 +1375,10 @@ class LLMClient:
                             if btype == "text":
                                 yield StreamEvent(type="text_start", content_index=idx)
                             elif btype == "thinking":
-                                yield StreamEvent(type="thinking_start", content_index=idx)
+                                yield StreamEvent(
+                                    type="thinking_start",
+                                    content_index=idx,
+                                )
                             elif btype == "tool_use":
                                 block_args[idx] = ""
                                 block_meta[idx] = {
@@ -1259,15 +1399,29 @@ class LLMClient:
                             if delta_type == "text_delta":
                                 text = delta.get("text", "")
                                 block_content[idx] = block_content.get(idx, "") + text
-                                yield StreamEvent(type="text_delta", content_index=idx, delta=text)
+                                yield StreamEvent(
+                                    type="text_delta",
+                                    content_index=idx,
+                                    delta=text,
+                                )
                             elif delta_type == "thinking_delta":
                                 thinking = delta.get("thinking", "")
-                                block_content[idx] = block_content.get(idx, "") + thinking
-                                yield StreamEvent(type="thinking_delta", content_index=idx, delta=thinking)
+                                block_content[idx] = (
+                                    block_content.get(idx, "") + thinking
+                                )
+                                yield StreamEvent(
+                                    type="thinking_delta",
+                                    content_index=idx,
+                                    delta=thinking,
+                                )
                             elif delta_type == "input_json_delta":
                                 partial = delta.get("partial_json", "")
                                 block_args[idx] = block_args.get(idx, "") + partial
-                                yield StreamEvent(type="toolcall_delta", content_index=idx, delta=partial)
+                                yield StreamEvent(
+                                    type="toolcall_delta",
+                                    content_index=idx,
+                                    delta=partial,
+                                )
 
                         elif event_type == "content_block_stop":
                             idx = data.get("index", 0)

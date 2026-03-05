@@ -1,8 +1,7 @@
 """Tests for streaming display — stream_chat yields StreamEvent objects."""
 
 import json
-from unittest.mock import MagicMock, AsyncMock, patch
-from io import StringIO
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -10,7 +9,6 @@ import pytest
 from koi.config import Config
 from koi.llm import LLMClient
 from koi.stream_events import StreamEvent
-
 
 # ── Streaming helpers ──
 
@@ -113,8 +111,14 @@ async def test_responses_stream_chat_yields_text_events(responses_client):
 async def test_responses_stream_chat_yields_tool_call_events(responses_client):
     """stream_chat yields toolcall events for Responses API."""
     lines = [
-        'data: {"type":"response.output_item.added","item":{"type":"function_call","call_id":"c1","name":"read_file"}}',
-        'data: {"type":"response.function_call_arguments.delta","call_id":"c1","delta":"{\\"path\\": \\"/tmp/x\\"}"}',
+        (
+            'data: {"type":"response.output_item.added",'
+            '"item":{"type":"function_call","call_id":"c1","name":"read_file"}}'
+        ),
+        (
+            'data: {"type":"response.function_call_arguments.delta",'
+            '"call_id":"c1","delta":"{\\"path\\": \\"/tmp/x\\"}"}'
+        ),
         "data: [DONE]",
     ]
 
@@ -151,7 +155,10 @@ async def test_responses_stream_chat_uses_completed_event(responses_client):
     }
     lines = [
         'data: {"type":"response.output_text.delta","delta":"Done!"}',
-        f'data: {{"type":"response.completed","response":{json.dumps(completed_response)}}}',
+        (
+            f'data: {{"type":"response.completed",'
+            f'"response":{json.dumps(completed_response)}}}'
+        ),
     ]
 
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
@@ -183,9 +190,7 @@ async def test_cc_stream_chat_yields_text_events(cc_client):
     cc_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in cc_client.stream_chat(
-        [{"role": "user", "content": "hello"}]
-    ):
+    async for event in cc_client.stream_chat([{"role": "user", "content": "hello"}]):
         events.append(event)
 
     text_deltas = [e.delta for e in events if e.type == "text_delta"]
@@ -198,9 +203,19 @@ async def test_cc_stream_chat_yields_text_events(cc_client):
 async def test_cc_stream_chat_yields_tool_call_events(cc_client):
     """Chat Completions stream_chat yields toolcall events."""
     lines = [
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"tc1","function":{"name":"run_command","arguments":""}}]}}]}',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\\"cmd\\":"}}]}}]}',
-        'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":" \\"ls\\"}"}}]}}]}',
+        (
+            'data: {"choices":[{"delta":{"tool_calls":'
+            '[{"index":0,"id":"tc1","function":'
+            '{"name":"run_command","arguments":""}}]}}]}'
+        ),
+        (
+            'data: {"choices":[{"delta":{"tool_calls":'
+            '[{"index":0,"function":{"arguments":"{\\"cmd\\":"}}]}}]}'
+        ),
+        (
+            'data: {"choices":[{"delta":{"tool_calls":'
+            '[{"index":0,"function":{"arguments":" \\"ls\\"}"}}]}}]}'
+        ),
         "data: [DONE]",
     ]
 
@@ -229,8 +244,14 @@ async def test_cc_stream_chat_yields_tool_call_events(cc_client):
 async def test_anthropic_stream_chat_yields_text_events(anthropic_client):
     """Anthropic stream_chat yields StreamEvent objects."""
     lines = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-        'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Hey"}}',
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"text","text":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"Hey"}}'
+        ),
         'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"!"}}',
         'data: {"type":"message_stop"}',
     ]
@@ -253,9 +274,21 @@ async def test_anthropic_stream_chat_yields_text_events(anthropic_client):
 async def test_anthropic_stream_chat_yields_tool_call_events(anthropic_client):
     """Anthropic stream_chat yields toolcall events."""
     lines = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu1","name":"read_file"}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \\"/x\\"}"}}',
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"tool_use","id":"tu1",'
+            '"name":"read_file"}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"input_json_delta",'
+            '"partial_json":"{\\"path\\":"}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"input_json_delta",'
+            '"partial_json":" \\"/x\\"}"}}'
+        ),
         'data: {"type":"message_stop"}',
     ]
 
@@ -280,10 +313,23 @@ async def test_anthropic_stream_chat_yields_tool_call_events(anthropic_client):
 async def test_anthropic_stream_chat_skips_thinking(anthropic_client):
     """Thinking events are yielded as thinking_delta, text as text_delta."""
     lines = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
-        'data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"internal reasoning"}}',
-        'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
-        'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Answer"}}',
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"thinking","thinking":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta",'
+            '"delta":{"type":"thinking_delta",'
+            '"thinking":"internal reasoning"}}'
+        ),
+        (
+            'data: {"type":"content_block_start","index":1,'
+            '"content_block":{"type":"text","text":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta",'
+            '"delta":{"type":"text_delta","text":"Answer"}}'
+        ),
         'data: {"type":"message_stop"}',
     ]
 
@@ -309,9 +355,7 @@ async def test_empty_stream_yields_done_event(responses_client):
     responses_client.client.stream = MagicMock(return_value=_StreamCtx(lines))
 
     events = []
-    async for event in responses_client.stream_chat(
-        [{"role": "user", "content": ""}]
-    ):
+    async for event in responses_client.stream_chat([{"role": "user", "content": ""}]):
         events.append(event)
 
     # Should have a done event
@@ -345,9 +389,7 @@ async def test_stream_response_strips_reasoning_tags():
 
     agent.llm_client.stream_chat = mock_stream_chat
 
-    response = await agent._stream_response(
-        [{"role": "user", "content": "test"}], []
-    )
+    response = await agent._stream_response([{"role": "user", "content": "test"}], [])
 
     assert response is not None
     msg = response["choices"][0]["message"]
@@ -360,9 +402,18 @@ async def test_stream_response_strips_reasoning_tags():
 async def test_anthropic_stream_events_text(anthropic_client):
     """_stream_anthropic_events yields text_start, text_delta, text_end, done."""
     lines = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}',
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"text","text":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"Hello"}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":" world"}}'
+        ),
         'data: {"type":"content_block_stop","index":0}',
         'data: {"type":"message_stop"}',
     ]
@@ -395,11 +446,26 @@ async def test_anthropic_stream_events_text(anthropic_client):
 
 
 async def test_anthropic_stream_events_tool_call(anthropic_client):
-    """_stream_anthropic_events yields toolcall_start, toolcall_delta, toolcall_end, done."""
+    """_stream_anthropic_events yields toolcall events.
+
+    Expects: toolcall_start, toolcall_delta, toolcall_end, done.
+    """
     lines = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tu1","name":"read_file"}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\\"path\\":"}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" \\"/x\\"}"}}',
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"tool_use","id":"tu1",'
+            '"name":"read_file"}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"input_json_delta",'
+            '"partial_json":"{\\"path\\":"}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"input_json_delta",'
+            '"partial_json":" \\"/x\\"}"}}'
+        ),
         'data: {"type":"content_block_stop","index":0}',
         'data: {"type":"message_stop"}',
     ]
@@ -413,7 +479,13 @@ async def test_anthropic_stream_events_tool_call(anthropic_client):
         events.append(event)
 
     types = [e.type for e in events]
-    assert types == ["toolcall_start", "toolcall_delta", "toolcall_delta", "toolcall_end", "done"]
+    assert types == [
+        "toolcall_start",
+        "toolcall_delta",
+        "toolcall_delta",
+        "toolcall_end",
+        "done",
+    ]
 
     # Check toolcall_start
     start = events[0]
@@ -430,14 +502,29 @@ async def test_anthropic_stream_events_tool_call(anthropic_client):
 # ── StreamEvent: thinking skipped in stream_chat ──
 
 
-async def test_anthropic_stream_events_thinking_skipped_in_stream_chat(anthropic_client):
+async def test_anthropic_stream_events_thinking_skipped_in_stream_chat(
+    anthropic_client,
+):
     """stream_chat yields all events including thinking; consumer filters."""
     lines = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"internal reasoning"}}',
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"thinking","thinking":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"thinking_delta",'
+            '"thinking":"internal reasoning"}}'
+        ),
         'data: {"type":"content_block_stop","index":0}',
-        'data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}',
-        'data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer"}}',
+        (
+            'data: {"type":"content_block_start","index":1,'
+            '"content_block":{"type":"text","text":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":1,'
+            '"delta":{"type":"text_delta","text":"Answer"}}'
+        ),
         'data: {"type":"content_block_stop","index":1}',
         'data: {"type":"message_stop"}',
     ]
@@ -463,9 +550,20 @@ async def test_anthropic_stream_events_thinking_skipped_in_stream_chat(anthropic
 async def test_anthropic_stream_events_usage(anthropic_client):
     """usage events carry correct token counts."""
     lines = [
-        'data: {"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":0,"cache_read_input_tokens":5,"cache_creation_input_tokens":2}}}',
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi"}}',
+        (
+            'data: {"type":"message_start","message":'
+            '{"usage":{"input_tokens":10,"output_tokens":0,'
+            '"cache_read_input_tokens":5,'
+            '"cache_creation_input_tokens":2}}}'
+        ),
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"text","text":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"Hi"}}'
+        ),
         'data: {"type":"content_block_stop","index":0}',
         'data: {"type":"message_delta","usage":{"output_tokens":3}}',
         'data: {"type":"message_stop"}',
@@ -499,9 +597,18 @@ async def test_anthropic_stream_events_usage(anthropic_client):
 async def test_anthropic_stream_chat_yields_events(anthropic_client):
     """stream_chat yields StreamEvent objects with correct types and deltas."""
     lines = [
-        'data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hey"}}',
-        'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}',
+        (
+            'data: {"type":"content_block_start","index":0,'
+            '"content_block":{"type":"text","text":""}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"Hey"}}'
+        ),
+        (
+            'data: {"type":"content_block_delta","index":0,'
+            '"delta":{"type":"text_delta","text":"!"}}'
+        ),
         'data: {"type":"message_stop"}',
     ]
 

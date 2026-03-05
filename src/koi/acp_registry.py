@@ -2,7 +2,6 @@
 
 import shutil
 from dataclasses import dataclass
-from typing import Dict, List, Optional
 
 
 @dataclass
@@ -11,8 +10,8 @@ class AgentEntry:
 
     name: str
     display_name: str
-    command: List[str]
-    check_binary: Optional[str] = None
+    command: list[str]
+    check_binary: str | None = None
 
     def is_available(self) -> bool:
         """Check if this agent's binary is installed."""
@@ -21,7 +20,7 @@ class AgentEntry:
         return shutil.which(self.check_binary) is not None
 
 
-BUILTIN_AGENTS: Dict[str, AgentEntry] = {
+BUILTIN_AGENTS: dict[str, AgentEntry] = {
     "claude-code": AgentEntry(
         name="claude-code",
         display_name="Claude Code",
@@ -55,7 +54,7 @@ BUILTIN_AGENTS: Dict[str, AgentEntry] = {
 }
 
 
-def get_agent(name: str, custom_agents: Optional[Dict] = None) -> Optional[AgentEntry]:
+def get_agent(name: str, custom_agents: dict | None = None) -> AgentEntry | None:
     """Look up an agent by name. Custom agents override builtins."""
     if custom_agents and name in custom_agents:
         entry = custom_agents[name]
@@ -70,7 +69,7 @@ def get_agent(name: str, custom_agents: Optional[Dict] = None) -> Optional[Agent
     return BUILTIN_AGENTS.get(name)
 
 
-def list_agents(custom_agents: Optional[Dict] = None) -> List[AgentEntry]:
+def list_agents(custom_agents: dict | None = None) -> list[AgentEntry]:
     """List all known agents (builtins + custom)."""
     agents = dict(BUILTIN_AGENTS)
     if custom_agents:
@@ -87,6 +86,6 @@ def list_agents(custom_agents: Optional[Dict] = None) -> List[AgentEntry]:
     return list(agents.values())
 
 
-def list_available_agents(custom_agents: Optional[Dict] = None) -> List[AgentEntry]:
+def list_available_agents(custom_agents: dict | None = None) -> list[AgentEntry]:
     """List only agents whose binary is installed."""
     return [a for a in list_agents(custom_agents) if a.is_available()]

@@ -4,13 +4,14 @@ import asyncio
 import json
 import os
 import sys
-from dataclasses import dataclass, field
+from collections.abc import Callable, Coroutine
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Coroutine, Dict, List, Optional
+from typing import Any, Optional
 from uuid import uuid4
 
-from .acp_client import ACPSession, ACPResult, ACP_AVAILABLE
+from .acp_client import ACPSession
 from .acp_registry import get_agent
 
 
@@ -20,22 +21,22 @@ class SubagentRun:
 
     id: str
     task: str
-    label: Optional[str]
+    label: str | None
     process: asyncio.subprocess.Process
     result_file: Path
     started_at: datetime
     mode: str = "run"
     timeout_seconds: int = 0
     completed: bool = False
-    last_activity: Optional[datetime] = None
-    harness: str = "koi"         # "koi" (native) or "acp"
-    agent_name: str = ""         # e.g. "claude-code", "codex"
-    acp_session: Optional[Any] = None  # ACPSession instance for harness="acp"
-    result: Optional[dict] = None
-    exit_code: Optional[int] = None
+    last_activity: datetime | None = None
+    harness: str = "koi"  # "koi" (native) or "acp"
+    agent_name: str = ""  # e.g. "claude-code", "codex"
+    acp_session: Any | None = None  # ACPSession instance for harness="acp"
+    result: dict | None = None
+    exit_code: int | None = None
     stdout: str = ""
     stderr: str = ""
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class SubagentManager:
@@ -50,22 +51,22 @@ class SubagentManager:
         self.config = config
         self.max_children = max_children
         self.max_depth = max_depth
-        self.active_runs: Dict[str, SubagentRun] = {}
+        self.active_runs: dict[str, SubagentRun] = {}
         self._depth = int(os.environ.get("KOI_SPAWN_DEPTH", "0"))
-        self._on_complete: Optional[
-            Callable[[SubagentRun], Coroutine[Any, Any, None]]
-        ] = None
+        self._on_complete: Callable[[SubagentRun], Coroutine[Any, Any, None]] | None = (
+            None
+        )
 
     # ── public API ──────────────────────────────────────────────
 
     async def spawn(
         self,
         task: str,
-        label: Optional[str] = None,
-        model: Optional[str] = None,
-        thinking: Optional[str] = None,
+        label: str | None = None,
+        model: str | None = None,
+        thinking: str | None = None,
         timeout_seconds: int = 0,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
     ) -> dict:
         """Spawn an isolated Koi sub-agent in the background.
 
@@ -83,9 +84,7 @@ class SubagentManager:
             }
 
         # Children guard
-        active_count = sum(
-            1 for r in self.active_runs.values() if not r.completed
-        )
+        active_count = sum(1 for r in self.active_runs.values() if not r.completed)
         if active_count >= self.max_children:
             return {
                 "status": "error",
@@ -95,11 +94,13 @@ class SubagentManager:
         run_id = str(uuid4())[:8]
 
         # Result file lives under .koi/subagent-runs/
-        result_file = Path(cwd or os.getcwd()) / ".koi" / "subagent-runs" / f"{run_id}.json"
+        result_file = (
+            Path(cwd or os.getcwd()) / ".koi" / "subagent-runs" / f"{run_id}.json"
+        )
         result_file.parent.mkdir(parents=True, exist_ok=True)
 
         # Build the command
-        cmd: List[str] = [
+        cmd: list[str] = [
             sys.executable,
             "-m",
             "koi",
@@ -150,29 +151,44 @@ class SubagentManager:
         self,
         agent_name: str,
         label: str,
-        cwd: Optional[str] = None,
+        cwd: str | None = None,
         auto_approve: bool = True,
         idle_timeout: int = 1800,
     ) -> dict:
         """Spawn an ACP agent as a persistent session."""
         # Depth guard
         if self._depth >= self.max_depth:
-            return {"status": "error", "error": f"Max spawn depth reached ({self.max_depth})."}
+            return {
+                "status": "error",
+                "error": f"Max spawn depth reached ({self.max_depth}).",
+            }
 
         active_count = sum(1 for r in self.active_runs.values() if not r.completed)
         if active_count >= self.max_children:
-            return {"status": "error", "error": f"Max children reached ({self.max_children})"}
+            return {
+                "status": "error",
+                "error": f"Max children reached ({self.max_children})",
+            }
 
         # Label uniqueness
         for r in self.active_runs.values():
             if not r.completed and r.label == label and r.mode == "session":
-                return {"status": "error", "error": f"Session with label '{label}' already exists"}
+                return {
+                    "status": "error",
+                    "error": f"Session with label '{label}' already exists",
+                }
 
         agent = get_agent(agent_name)
         if not agent:
             return {"status": "error", "error": f"Unknown agent: {agent_name}"}
         if not agent.is_available():
-            return {"status": "error", "error": f"Agent '{agent_name}' is not installed (binary '{agent.check_binary}' not found)"}
+            return {
+                "status": "error",
+                "error": (
+                    f"Agent '{agent_name}' is not installed"
+                    f" (binary '{agent.check_binary}' not found)"
+                ),
+            }
 
         run_id = str(uuid4())[:8]
 
@@ -184,14 +200,20 @@ class SubagentManager:
             )
             session_id = await acp_sess.start()
         except Exception as e:
-            return {"status": "error", "error": f"Failed to start ACP agent '{agent_name}': {e}"}
+            return {
+                "status": "error",
+                "error": f"Failed to start ACP agent '{agent_name}': {e}",
+            }
 
         run = SubagentRun(
             id=run_id,
             task=f"[acp-session:{agent_name}:{label}]",
             label=label,
             process=acp_sess._process,
-            result_file=Path(cwd or os.getcwd()) / ".koi" / "subagent-runs" / f"{run_id}.json",
+            result_file=Path(cwd or os.getcwd())
+            / ".koi"
+            / "subagent-runs"
+            / f"{run_id}.json",
             started_at=datetime.now(),
             mode="session",
             timeout_seconds=0,
@@ -210,7 +232,11 @@ class SubagentManager:
             "label": label,
             "agent": agent_name,
             "acp_session_id": session_id,
-            "note": f"ACP session '{label}' started with {agent.display_name}. Use send_to_subagent to communicate.",
+            "note": (
+                f"ACP session '{label}' started with"
+                f" {agent.display_name}."
+                " Use send_to_subagent to communicate."
+            ),
         }
 
     async def send_acp(self, target: str, message: str, timeout: float = 300.0) -> dict:
@@ -229,7 +255,9 @@ class SubagentManager:
             result = await run.acp_session.send(message, timeout=timeout)
             if result.stop_reason == "timeout":
                 await self._kill_run(run, f"ACP prompt timed out after {timeout}s")
-                return {"error": f"ACP prompt timed out after {timeout}s. Session killed."}
+                return {
+                    "error": f"ACP prompt timed out after {timeout}s. Session killed."
+                }
         except Exception as e:
             await self._kill_run(run, str(e))
             return {"error": f"ACP send failed: {e}"}
@@ -247,9 +275,9 @@ class SubagentManager:
     async def spawn_session(
         self,
         label: str,
-        model: Optional[str] = None,
-        thinking: Optional[str] = None,
-        cwd: Optional[str] = None,
+        model: str | None = None,
+        thinking: str | None = None,
+        cwd: str | None = None,
         idle_timeout: int = 1800,
     ) -> dict:
         """Spawn a persistent subagent session.
@@ -259,23 +287,34 @@ class SubagentManager:
         """
         # Depth guard
         if self._depth >= self.max_depth:
-            return {"status": "error", "error": f"Max spawn depth reached ({self.max_depth})."}
+            return {
+                "status": "error",
+                "error": f"Max spawn depth reached ({self.max_depth}).",
+            }
 
         # Children guard
         active_count = sum(1 for r in self.active_runs.values() if not r.completed)
         if active_count >= self.max_children:
-            return {"status": "error", "error": f"Max children reached ({self.max_children})"}
+            return {
+                "status": "error",
+                "error": f"Max children reached ({self.max_children})",
+            }
 
         # Label uniqueness
         for r in self.active_runs.values():
             if not r.completed and r.label == label and r.mode == "session":
-                return {"status": "error", "error": f"Session with label '{label}' already exists"}
+                return {
+                    "status": "error",
+                    "error": f"Session with label '{label}' already exists",
+                }
 
         run_id = str(uuid4())[:8]
-        result_file = Path(cwd or os.getcwd()) / ".koi" / "subagent-runs" / f"{run_id}.json"
+        result_file = (
+            Path(cwd or os.getcwd()) / ".koi" / "subagent-runs" / f"{run_id}.json"
+        )
         result_file.parent.mkdir(parents=True, exist_ok=True)
 
-        cmd: List[str] = [sys.executable, "-m", "koi", "run", "--pipe"]
+        cmd: list[str] = [sys.executable, "-m", "koi", "run", "--pipe"]
         if model:
             cmd.extend(["--model", model])
         if thinking:
@@ -312,7 +351,10 @@ class SubagentManager:
             "status": "accepted",
             "run_id": run_id,
             "label": label,
-            "note": f"Persistent session '{label}' started. Use send_to_subagent to communicate.",
+            "note": (
+                f"Persistent session '{label}' started."
+                " Use send_to_subagent to communicate."
+            ),
         }
 
     async def send(self, target: str, message: str, timeout: float = 120.0) -> dict:
@@ -330,7 +372,11 @@ class SubagentManager:
             run.completed = True
             run.exit_code = run.process.returncode
             run.error = f"Process exited with code {run.process.returncode}"
-            return {"error": f"Session process has died (exit code {run.process.returncode})"}
+            return {
+                "error": (
+                    f"Session process has died (exit code {run.process.returncode})"
+                )
+            }
 
         # Dispatch to ACP if applicable
         if run.harness == "acp":
@@ -356,7 +402,11 @@ class SubagentManager:
         except asyncio.TimeoutError:
             # Timeout = kill to prevent zombie processes and stale responses
             await self._kill_run(run, f"Timed out after {timeout}s")
-            return {"error": f"Timed out waiting for response after {timeout}s. Session killed."}
+            return {
+                "error": (
+                    f"Timed out waiting for response after {timeout}s. Session killed."
+                )
+            }
 
         if not resp_line:
             run.completed = True
@@ -388,7 +438,10 @@ class SubagentManager:
             await asyncio.sleep(60)
             if run.completed:
                 break
-            if run.last_activity and (datetime.now() - run.last_activity).total_seconds() > idle_timeout:
+            if (
+                run.last_activity
+                and (datetime.now() - run.last_activity).total_seconds() > idle_timeout
+            ):
                 await self._kill_run(run, f"Idle timeout ({idle_timeout}s)")
                 break
 
@@ -404,9 +457,7 @@ class SubagentManager:
                 "status": "completed" if r.completed else "running",
                 "started": r.started_at.isoformat(),
                 "result_summary": (
-                    (r.result or {}).get("summary", "")[:200]
-                    if r.completed
-                    else None
+                    (r.result or {}).get("summary", "")[:200] if r.completed else None
                 ),
             }
             if r.mode == "session" and r.last_activity and not r.completed:
@@ -494,7 +545,7 @@ class SubagentManager:
             del self.active_runs[run_id]
         return len(to_remove)
 
-    def get_result(self, run_id: str) -> Optional[dict]:
+    def get_result(self, run_id: str) -> dict | None:
         """Return the result dict for a completed run (or None)."""
         run = self.active_runs.get(run_id)
         if run and run.completed:

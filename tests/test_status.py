@@ -1,12 +1,10 @@
 """Tests for /status command and supporting helpers."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from koi.agent import Agent, _fmt_num
 from koi.compaction import ContextCompactor
 from koi.config import Config
-from koi.usage import TokenUsage
 
 
 def _make_agent(**overrides):
@@ -187,38 +185,27 @@ class TestStatusCommand:
 
 class TestCompactionCount:
     def test_compaction_count_initializes_to_zero(self):
-        config = Config(
-            api_base="https://api.example.com",
-            api_key="test",
-            model="test-model",
-            api_format="responses",
-            thinking_level="off",
-        )
         client = MagicMock()
         compactor = ContextCompactor(client, 128000)
         assert compactor.compaction_count == 0
 
     async def test_compaction_count_increments(self):
-        config = Config(
-            api_base="https://api.example.com",
-            api_key="test",
-            model="test-model",
-            api_format="responses",
-            thinking_level="off",
-        )
         client = MagicMock()
         client.chat = AsyncMock(
             return_value={
                 "choices": [
-                    {"message": {"role": "assistant", "content": "Summary of conversation."}}
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "Summary of conversation.",
+                        }
+                    }
                 ]
             }
         )
         compactor = ContextCompactor(client, 128000)
 
-        messages = [
-            {"role": "user", "content": f"Message {i}"} for i in range(10)
-        ]
+        messages = [{"role": "user", "content": f"Message {i}"} for i in range(10)]
         result = await compactor.compact_messages(messages)
 
         assert compactor.compaction_count == 1
@@ -241,6 +228,7 @@ class TestHelpIncludesStatus:
         # Capture the help text by calling _show_help through capsys
         # We'll just check the method exists and the help text mentions /status
         import io
+
         from rich.console import Console
 
         buf = io.StringIO()

@@ -6,7 +6,7 @@ import json
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 class SessionManager:
@@ -24,7 +24,7 @@ class SessionManager:
 
     VERSION = 2
 
-    def __init__(self, koi_dir: Path, session_path: Optional[Path] = None):
+    def __init__(self, koi_dir: Path, session_path: Path | None = None):
         """Initialize SessionManager.
 
         Args:
@@ -36,28 +36,28 @@ class SessionManager:
         self._sessions_dir = koi_dir / "sessions"
         self._sessions_dir.mkdir(parents=True, exist_ok=True)
         self._file = None
-        self._path: Optional[Path] = None
-        self._session_id: Optional[str] = None
+        self._path: Path | None = None
+        self._session_id: str | None = None
         self._entry_ids: set = set()
-        self._leaf_id: Optional[str] = None
+        self._leaf_id: str | None = None
 
         if session_path:
             self._path = session_path
             self._session_id = self._extract_session_id(session_path)
 
     @property
-    def session_id(self) -> Optional[str]:
+    def session_id(self) -> str | None:
         return self._session_id
 
     @property
-    def session_path(self) -> Optional[Path]:
+    def session_path(self) -> Path | None:
         return self._path
 
     @property
-    def leaf_id(self) -> Optional[str]:
+    def leaf_id(self) -> str | None:
         return self._leaf_id
 
-    def start_session(self, model: str, cwd: Optional[str] = None) -> str:
+    def start_session(self, model: str, cwd: str | None = None) -> str:
         """Start a new session. Writes the session header.
 
         Returns the session ID.
@@ -91,7 +91,7 @@ class SessionManager:
             raise FileNotFoundError(f"Session file not found: {self._path}")
 
         if not self._entry_ids:
-            with open(self._path, "r", encoding="utf-8") as f:
+            with open(self._path, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -107,7 +107,7 @@ class SessionManager:
 
         self._file = open(self._path, "a", encoding="utf-8")
 
-    def save_message(self, message: Dict[str, Any]) -> None:
+    def save_message(self, message: dict[str, Any]) -> None:
         """Persist a conversation message (user, assistant, or tool)."""
         entry = {
             "type": "message",
@@ -136,7 +136,9 @@ class SessionManager:
         }
         self._write_entry(entry)
 
-    def load_session(self, path: Optional[Path] = None, leaf_id: Optional[str] = None) -> Dict[str, Any]:
+    def load_session(
+        self, path: Path | None = None, leaf_id: str | None = None
+    ) -> dict[str, Any]:
         """Load a session from a JSONL file.
 
         If leaf_id is provided, walks from that entry to root to get the active branch.
@@ -149,7 +151,7 @@ class SessionManager:
         header = None
         all_entries = []
 
-        with open(target, "r", encoding="utf-8") as f:
+        with open(target, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -208,7 +210,7 @@ class SessionManager:
             "model_changes": model_changes,
         }
 
-    def fork(self, fork_from_id: Optional[str] = None) -> None:
+    def fork(self, fork_from_id: str | None = None) -> None:
         """Fork the session from a specific entry (or current leaf).
 
         After forking, new entries will branch from the fork point.
@@ -219,7 +221,7 @@ class SessionManager:
                 raise ValueError(f"Entry ID not found: {fork_from_id}")
             self._leaf_id = fork_from_id
 
-    def get_branches(self, path: Optional[Path] = None) -> List[Dict[str, Any]]:
+    def get_branches(self, path: Path | None = None) -> list[dict[str, Any]]:
         """Get entries that have multiple children (branch points).
 
         Returns list of entry dicts that are parentId of more than one entry.
@@ -229,7 +231,7 @@ class SessionManager:
             return []
 
         all_entries = []
-        with open(target, "r", encoding="utf-8") as f:
+        with open(target, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -241,16 +243,20 @@ class SessionManager:
                 if entry.get("type") != "session" and "id" in entry:
                     all_entries.append(entry)
 
-        children_count: Dict[str, int] = {}
+        children_count: dict[str, int] = {}
         for e in all_entries:
             pid = e.get("parentId")
             if pid:
                 children_count[pid] = children_count.get(pid, 0) + 1
 
         by_id = {e["id"]: e for e in all_entries}
-        return [by_id[eid] for eid in children_count if children_count[eid] > 1 and eid in by_id]
+        return [
+            by_id[eid]
+            for eid in children_count
+            if children_count[eid] > 1 and eid in by_id
+        ]
 
-    def list_sessions(self, limit: int = 20) -> List[Dict[str, Any]]:
+    def list_sessions(self, limit: int = 20) -> list[dict[str, Any]]:
         """List recent sessions with metadata.
 
         Returns a list of session header dicts, most recent first.
@@ -270,7 +276,7 @@ class SessionManager:
 
         for f in files[:limit]:
             try:
-                with open(f, "r", encoding="utf-8") as fh:
+                with open(f, encoding="utf-8") as fh:
                     first_line = fh.readline().strip()
                     if not first_line:
                         continue
@@ -298,7 +304,7 @@ class SessionManager:
 
         return sessions
 
-    def get_latest_session(self) -> Optional[Path]:
+    def get_latest_session(self) -> Path | None:
         """Get the path to the most recent session file, or None."""
         if not self._sessions_dir.exists():
             return None
@@ -326,7 +332,7 @@ class SessionManager:
                 self._entry_ids.add(eid)
                 return eid
 
-    def _write_entry(self, entry: Dict[str, Any]) -> None:
+    def _write_entry(self, entry: dict[str, Any]) -> None:
         """Write a single JSONL entry."""
         if self._file is None:
             return

@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-from typing import List
 
 from .channels.base import Channel
 from .config import Config
@@ -31,12 +29,12 @@ def _import_starlette():
 class KoiServer:
     """Koi HTTP server that hosts channels and a health endpoint."""
 
-    def __init__(self, config: Config, channels: List[Channel] | None = None):
+    def __init__(self, config: Config, channels: list[Channel] | None = None):
         self.config = config
-        self.channels: List[Channel] = channels or []
+        self.channels: list[Channel] = channels or []
         self.session_manager = SessionManager(config)
 
-        Starlette, JSONResponse, Route = _import_starlette()
+        Starlette, JSONResponse, Route = _import_starlette()  # noqa: N806
 
         async def health(request):
             return JSONResponse(
@@ -78,7 +76,6 @@ class KoiServer:
             import uvicorn
         except ImportError:
             raise ImportError(
-                "Server mode requires uvicorn. "
-                "Install with: pip install 'koi[server]'"
+                "Server mode requires uvicorn. Install with: pip install 'koi[server]'"
             )
         uvicorn.run(self.app, host=host, port=port, log_level="info")

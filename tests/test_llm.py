@@ -1,15 +1,13 @@
 """Tests for llm module — Responses API conversion logic."""
 
-import asyncio
 import json as _json
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 
 from koi.config import Config
 from koi.llm import LLMClient
-
 
 # ── Streaming helpers ──
 
@@ -456,7 +454,10 @@ def test_build_cc_payload_with_tools(cc_client):
             "function": {
                 "name": "read_file",
                 "description": "Read a file",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string"}}},
+                "parameters": {
+                    "type": "object",
+                    "properties": {"path": {"type": "string"}},
+                },
             },
         }
     ]
@@ -532,12 +533,17 @@ async def test_chat_completions_builds_correct_payload(cc_client):
 
     cc_client.client.post = fake_post
 
-    result = await cc_client.chat(messages, tools=tools, system_prompt="You are helpful.")
+    result = await cc_client.chat(
+        messages, tools=tools, system_prompt="You are helpful."
+    )
 
     # Verify CC payload structure
     assert captured_payload["model"] == "us/aws/anthropic/bedrock-claude-opus-4-6"
     # System prompt prepended to payload messages
-    assert captured_payload["messages"][0] == {"role": "system", "content": "You are helpful."}
+    assert captured_payload["messages"][0] == {
+        "role": "system",
+        "content": "You are helpful.",
+    }
     assert captured_payload["messages"][1] == {"role": "user", "content": "Hi"}
     assert captured_payload["max_tokens"] == 4096
     assert captured_payload["tools"] == tools
@@ -596,7 +602,12 @@ async def test_temperature_included_in_cc_payload(cc_client):
         mock_resp.raise_for_status = lambda: None
         mock_resp.json.return_value = {
             "id": "r",
-            "choices": [{"message": {"role": "assistant", "content": ""}, "finish_reason": "stop"}],
+            "choices": [
+                {
+                    "message": {"role": "assistant", "content": ""},
+                    "finish_reason": "stop",
+                }
+            ],
         }
         return mock_resp
 
@@ -636,6 +647,7 @@ async def test_retry_all_exhausted_raises(client):
     from koi.errors import KoiRateLimitError
 
     with patch("asyncio.sleep", new_callable=AsyncMock):
+
         async def always_429(url, headers=None, json=None):
             mock_resp = MagicMock()
             mock_resp.status_code = 429
@@ -723,9 +735,18 @@ async def test_stream_responses_events_text_deltas(client):
 async def test_stream_responses_events_tool_call(client):
     """_stream_responses_events yields toolcall events."""
     lines = [
-        'data: {"type": "response.output_item.added", "item": {"type": "function_call", "call_id": "c1", "name": "read_file"}}',
-        'data: {"type": "response.function_call_arguments.delta", "call_id": "c1", "delta": "{\\"path\\": "}',
-        'data: {"type": "response.function_call_arguments.delta", "call_id": "c1", "delta": "\\"x.txt\\"}"}',
+        (
+            'data: {"type": "response.output_item.added", "item": '
+            '{"type": "function_call", "call_id": "c1", "name": "read_file"}}'
+        ),
+        (
+            'data: {"type": "response.function_call_arguments.delta", '
+            '"call_id": "c1", "delta": "{\\"path\\": "}'
+        ),
+        (
+            'data: {"type": "response.function_call_arguments.delta", '
+            '"call_id": "c1", "delta": "\\"x.txt\\"}"}'
+        ),
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
@@ -756,7 +777,10 @@ async def test_stream_responses_events_completed(client):
     }
     lines = [
         'data: {"type": "response.output_text.delta", "delta": "Done!"}',
-        f'data: {{"type": "response.completed", "response": {_json.dumps(completed_resp)}}}',
+        (
+            f'data: {{"type": "response.completed", '
+            f'"response": {_json.dumps(completed_resp)}}}'
+        ),
         "data: [DONE]",
     ]
     client.client.stream = lambda *a, **kw: _StreamCtx(lines)
@@ -801,9 +825,7 @@ async def test_stream_cc_events_assembles_text(cc_client):
     ]
     cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in cc_client._stream_cc_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in cc_client._stream_cc_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     text = "".join(e.delta for e in events if e.type == "text_delta")
     assert text == "Hi there"
@@ -812,15 +834,19 @@ async def test_stream_cc_events_assembles_text(cc_client):
 async def test_stream_cc_events_assembles_tool_calls(cc_client):
     """_stream_cc_events yields toolcall events by index."""
     lines = [
-        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "call_1", "function": {"name": "read_file", "arguments": ""}}]}}]}',
-        'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"arguments": "{\\"path\\": \\"a.txt\\"}"}}]}}]}',
+        (
+            'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, '
+            '"id": "call_1", "function": {"name": "read_file", "arguments": ""}}]}}]}'
+        ),
+        (
+            'data: {"choices": [{"delta": {"tool_calls": [{"index": 0, '
+            '"function": {"arguments": "{\\"path\\": \\"a.txt\\"}"}}]}}]}'
+        ),
         "data: [DONE]",
     ]
     cc_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in cc_client._stream_cc_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in cc_client._stream_cc_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     starts = [e for e in events if e.type == "toolcall_start"]
     assert len(starts) == 1
@@ -832,7 +858,6 @@ async def test_stream_cc_events_assembles_tool_calls(cc_client):
 
 async def test_stream_chat_yields_tokens_responses_format(client):
     """stream_chat() yields StreamEvent objects from output_text.delta events."""
-    from koi.stream_events import StreamEvent
     lines = [
         'data: {"type": "response.output_text.delta", "delta": "tok1"}',
         'data: {"type": "response.output_text.delta", "delta": "tok2"}',
@@ -993,6 +1018,7 @@ def test_convert_anthropic_response_tool_use(anthropic_client):
     assert tc["id"] == "toolu_1"
     assert tc["function"]["name"] == "read_file"
     import json as _j
+
     assert _j.loads(tc["function"]["arguments"]) == {"path": "x.py"}
 
 
@@ -1012,9 +1038,7 @@ async def test_chat_routes_to_anthropic(anthropic_client):
         return mock_resp
 
     anthropic_client.client.post = fake_post
-    result = await anthropic_client.chat(
-        [{"role": "user", "content": "Hello"}]
-    )
+    result = await anthropic_client.chat([{"role": "user", "content": "Hello"}])
     # Anthropic payload uses "messages" (not "input") and "max_tokens"
     assert "messages" in captured
     assert "max_tokens" in captured
@@ -1025,12 +1049,21 @@ async def test_chat_routes_to_anthropic(anthropic_client):
 async def test_stream_anthropic_events_assembles_text(anthropic_client):
     """_stream_anthropic_events yields text_delta events."""
     lines = [
-        '{"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}',
-        '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}',
-        '{"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": " world"}}',
+        (
+            '{"type": "content_block_start", "index": 0, '
+            '"content_block": {"type": "text", "text": ""}}'
+        ),
+        (
+            '{"type": "content_block_delta", "index": 0, '
+            '"delta": {"type": "text_delta", "text": "Hello"}}'
+        ),
+        (
+            '{"type": "content_block_delta", "index": 0, '
+            '"delta": {"type": "text_delta", "text": " world"}}'
+        ),
         '{"type": "message_stop"}',
     ]
-    sse_lines = [f"data: {l}" for l in lines]
+    sse_lines = [f"data: {entry}" for entry in lines]
     anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(sse_lines)
     events = []
     async for event in anthropic_client._stream_anthropic_events(
@@ -1044,8 +1077,14 @@ async def test_stream_anthropic_events_assembles_text(anthropic_client):
 async def test_stream_chat_yields_tokens_anthropic_format(anthropic_client):
     """stream_chat() yields StreamEvent objects for anthropic format."""
     lines = [
-        'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok1"}}',
-        'data: {"type": "content_block_delta", "delta": {"type": "text_delta", "text": "tok2"}}',
+        (
+            'data: {"type": "content_block_delta", '
+            '"delta": {"type": "text_delta", "text": "tok1"}}'
+        ),
+        (
+            'data: {"type": "content_block_delta", '
+            '"delta": {"type": "text_delta", "text": "tok2"}}'
+        ),
         "data: [DONE]",
     ]
     anthropic_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
@@ -1111,7 +1150,10 @@ def test_convert_messages_to_anthropic_assistant_with_text_and_tool_call(client)
                 {
                     "id": "tc1",
                     "type": "function",
-                    "function": {"name": "read_file", "arguments": '{"path": "/tmp/x"}'},
+                    "function": {
+                        "name": "read_file",
+                        "arguments": '{"path": "/tmp/x"}',
+                    },
                 }
             ],
         }
@@ -1167,7 +1209,9 @@ async def test_retry_invalid_retry_after_falls_back_to_backoff(client):
         ok = MagicMock()
         ok.raise_for_status = lambda: None
         ok.json.return_value = {
-            "output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]
+            "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "ok"}]}
+            ]
         }
         return ok
 
@@ -1208,7 +1252,8 @@ async def test_retry_non_http_exception_raises_immediately(client):
 
 
 async def test_stream_anthropic_skips_blank_and_malformed_lines():
-    """_stream_anthropic_events silently skips blank, non-data, and malformed-JSON lines."""
+    """_stream_anthropic_events silently skips blank, non-data,
+    and malformed-JSON lines."""
     config = Config(
         api_base="https://api.anthropic.com/v1/messages",
         api_key="test-key",
@@ -1218,11 +1263,17 @@ async def test_stream_anthropic_skips_blank_and_malformed_lines():
     anthro_client = LLMClient(config)
 
     lines = [
-        "",                                # blank → skip
-        "event: ping",                     # no "data: " prefix → skip
-        "data: {malformed json",           # bad JSON → skip
-        'data: {"type": "content_block_start", "index": 0, "content_block": {"type": "text"}}',
-        'data: {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "hello"}}',
+        "",  # blank → skip
+        "event: ping",  # no "data: " prefix → skip
+        "data: {malformed json",  # bad JSON → skip
+        (
+            'data: {"type": "content_block_start", "index": 0, '
+            '"content_block": {"type": "text"}}'
+        ),
+        (
+            'data: {"type": "content_block_delta", "index": 0, '
+            '"delta": {"type": "text_delta", "text": "hello"}}'
+        ),
         'data: {"type": "message_stop"}',
     ]
     anthro_client.client.stream = lambda *a, **kw: _StreamCtx(lines)
@@ -1250,17 +1301,15 @@ async def test_stream_cc_skips_blank_malformed_empty_choices():
         )
     )
     lines = [
-        "",                                        # blank → skip
-        "data: {bad json",                         # malformed → skip
-        'data: {"choices": []}',                   # empty choices → skip
+        "",  # blank → skip
+        "data: {bad json",  # malformed → skip
+        'data: {"choices": []}',  # empty choices → skip
         'data: {"choices": [{"delta": {"content": "world"}}]}',
         "data: [DONE]",
     ]
     cc2.client.stream = lambda *a, **kw: _StreamCtx(lines)
     events = []
-    async for event in cc2._stream_cc_events(
-        [{"role": "user", "content": "hi"}]
-    ):
+    async for event in cc2._stream_cc_events([{"role": "user", "content": "hi"}]):
         events.append(event)
     text = "".join(e.delta for e in events if e.type == "text_delta")
     assert text == "world"
@@ -1315,6 +1364,7 @@ async def test_stream_chat_http_error_raises_runtime_error(client):
     class _ErrorCtx:
         async def __aenter__(self):
             raise error
+
         async def __aexit__(self, *_):
             pass
 
@@ -1338,6 +1388,7 @@ async def test_stream_cc_events_http_error_raises_runtime_error(cc_client):
     class _ErrorCtx:
         async def __aenter__(self):
             raise error
+
         async def __aexit__(self, *_):
             pass
 
@@ -1369,6 +1420,7 @@ async def test_stream_anthropic_tokens_http_error_raises_runtime_error():
     class _ErrorCtx:
         async def __aenter__(self):
             raise error
+
         async def __aexit__(self, *_):
             pass
 
@@ -1386,6 +1438,7 @@ async def test_stream_chat_general_exception_raises_runtime_error(client):
     class _ErrorCtx:
         async def __aenter__(self):
             raise ConnectionError("network down")
+
         async def __aexit__(self, *_):
             pass
 

@@ -6,7 +6,7 @@ Ensures messages fit in the context window by:
 """
 
 import math
-from typing import Any, Dict, List
+from typing import Any
 
 # --- Constants ---
 
@@ -19,7 +19,7 @@ TRUNCATION_NOTICE = "[truncated: output exceeded context limit]"
 COMPACTION_PLACEHOLDER = "[compacted: tool output removed to free context]"
 
 
-def estimate_message_chars(msg: Dict[str, Any]) -> int:
+def estimate_message_chars(msg: dict[str, Any]) -> int:
     """Estimate the character cost of a single message.
 
     Tool messages are weighted by CHARS_PER_TOKEN / TOOL_RESULT_CHARS_PER_TOKEN
@@ -54,12 +54,12 @@ def estimate_message_chars(msg: Dict[str, Any]) -> int:
     return len(content) if isinstance(content, str) else 0
 
 
-def estimate_context_chars(messages: List[Dict[str, Any]]) -> int:
+def estimate_context_chars(messages: list[dict[str, Any]]) -> int:
     """Estimate total weighted character count across all messages."""
     return sum(estimate_message_chars(m) for m in messages)
 
 
-def truncate_tool_result(msg: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
+def truncate_tool_result(msg: dict[str, Any], max_chars: int) -> dict[str, Any]:
     """Truncate a tool result's content if it exceeds max_chars.
 
     Tries to break at a newline boundary within the last 30% of the budget.
@@ -96,8 +96,8 @@ def truncate_tool_result(msg: Dict[str, Any], max_chars: int) -> Dict[str, Any]:
 
 
 def compact_oldest_tool_results(
-    messages: List[Dict[str, Any]], chars_needed: int
-) -> List[Dict[str, Any]]:
+    messages: list[dict[str, Any]], chars_needed: int
+) -> list[dict[str, Any]]:
     """Replace oldest tool results with COMPACTION_PLACEHOLDER until enough chars freed.
 
     Returns a new list (does not mutate the original).
@@ -129,8 +129,8 @@ def compact_oldest_tool_results(
 
 
 def enforce_context_budget(
-    messages: List[Dict[str, Any]], context_window_tokens: int
-) -> List[Dict[str, Any]]:
+    messages: list[dict[str, Any]], context_window_tokens: int
+) -> list[dict[str, Any]]:
     """Enforce context window budget on messages.
 
     Two-step enforcement:
@@ -161,8 +161,6 @@ def enforce_context_budget(
     # Step 2: If total context exceeds budget, compact oldest tool results
     total_chars = estimate_context_chars(result)
     if total_chars > context_budget_chars:
-        result = compact_oldest_tool_results(
-            result, total_chars - context_budget_chars
-        )
+        result = compact_oldest_tool_results(result, total_chars - context_budget_chars)
 
     return result

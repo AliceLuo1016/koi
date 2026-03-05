@@ -1,7 +1,6 @@
 """Tests for tool output truncation (per-tool limits + generic safety net)."""
 
 import asyncio
-import json
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import AsyncMock, Mock, patch
@@ -144,7 +143,9 @@ class TestExecCommandTruncation:
             assert result["success"]
             assert "truncation_notice" in result
             assert "output truncated" in result["truncation_notice"]
-            assert len(result["stdout"]) + len(result["stderr"]) <= MAX_EXEC_OUTPUT_BYTES
+            assert (
+                len(result["stdout"]) + len(result["stderr"]) <= MAX_EXEC_OUTPUT_BYTES
+            )
 
     def test_shows_truncation_notice(self):
         """Truncation notice includes byte counts."""
@@ -241,7 +242,9 @@ class TestFormatToolResult:
             "stdout": "some output",
             "stderr": "",
             "exit_code": 0,
-            "truncation_notice": "[output truncated: showing first 50000 of 60000 bytes]",
+            "truncation_notice": (
+                "[output truncated: showing first 50000 of 60000 bytes]"
+            ),
         }
         formatted = _format_tool_result(result, context_window=128_000)
         assert "output truncated" in formatted
@@ -279,7 +282,9 @@ class TestTruncateToolResult:
         assert "Content truncated" in result
         # Should have cut at the newline after the a's, not in the middle of b's
         content_before_suffix = result.split("\u26a0\ufe0f")[0]
-        assert content_before_suffix.rstrip().endswith("a" * 10) or content_before_suffix.rstrip().endswith("\n")
+        assert content_before_suffix.rstrip().endswith(
+            "a" * 10
+        ) or content_before_suffix.rstrip().endswith("\n")
 
     def test_max_cap_400k(self):
         """Budget never exceeds 400K chars even with huge context window."""

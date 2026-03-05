@@ -10,7 +10,6 @@ from click.testing import CliRunner
 from koi.cli import _gather_project_files, _scan_workspace, main
 from koi.config import Config
 
-
 # ── _gather_project_files ──
 
 
@@ -137,13 +136,15 @@ async def test_scan_workspace_returns_llm_content():
             model="test-model",
         )
         mock_response = {
-            "choices": [{"message": {"content": "## User\n- Name: Alice\n\n## Project\n- Koi"}}]
+            "choices": [
+                {"message": {"content": "## User\n- Name: Alice\n\n## Project\n- Koi"}}
+            ]
         }
-        with patch("koi.cli.LLMClient") as MockLLM:
+        with patch("koi.cli.LLMClient") as mock_llm:
             instance = AsyncMock()
             instance.chat = AsyncMock(return_value=mock_response)
             instance.close = AsyncMock()
-            MockLLM.return_value = instance
+            mock_llm.return_value = instance
 
             result = await _scan_workspace(td, config, "Alice")
 
@@ -155,13 +156,15 @@ async def test_scan_workspace_strips_whitespace():
     """_scan_workspace strips leading/trailing whitespace from LLM response."""
     with TemporaryDirectory() as tmp:
         config = Config(api_base="https://x.com", api_key="k", model="m")
-        mock_response = {"choices": [{"message": {"content": "  \n## User\n- Name: Bob\n\n  "}}]}
+        mock_response = {
+            "choices": [{"message": {"content": "  \n## User\n- Name: Bob\n\n  "}}]
+        }
 
-        with patch("koi.cli.LLMClient") as MockLLM:
+        with patch("koi.cli.LLMClient") as mock_llm:
             instance = AsyncMock()
             instance.chat = AsyncMock(return_value=mock_response)
             instance.close = AsyncMock()
-            MockLLM.return_value = instance
+            mock_llm.return_value = instance
 
             result = await _scan_workspace(Path(tmp), config, "Bob")
 
@@ -174,11 +177,11 @@ async def test_scan_workspace_empty_content_returns_empty_string():
         config = Config(api_base="https://x.com", api_key="k", model="m")
         mock_response = {"choices": [{"message": {"content": "  "}}]}
 
-        with patch("koi.cli.LLMClient") as MockLLM:
+        with patch("koi.cli.LLMClient") as mock_llm:
             instance = AsyncMock()
             instance.chat = AsyncMock(return_value=mock_response)
             instance.close = AsyncMock()
-            MockLLM.return_value = instance
+            mock_llm.return_value = instance
 
             result = await _scan_workspace(Path(tmp), config, "")
 
@@ -190,11 +193,11 @@ async def test_scan_workspace_always_closes_client():
     with TemporaryDirectory() as tmp:
         config = Config(api_base="https://x.com", api_key="k", model="m")
 
-        with patch("koi.cli.LLMClient") as MockLLM:
+        with patch("koi.cli.LLMClient") as mock_llm:
             instance = AsyncMock()
             instance.chat = AsyncMock(side_effect=RuntimeError("boom"))
             instance.close = AsyncMock()
-            MockLLM.return_value = instance
+            mock_llm.return_value = instance
 
             with pytest.raises(RuntimeError, match="boom"):
                 await _scan_workspace(Path(tmp), config, "Bob")
@@ -212,11 +215,11 @@ async def test_scan_workspace_passes_username_in_prompt():
             captured["messages"] = messages
             return {"choices": [{"message": {"content": "## User\n- Name: Charlie"}}]}
 
-        with patch("koi.cli.LLMClient") as MockLLM:
+        with patch("koi.cli.LLMClient") as mock_llm:
             instance = AsyncMock()
             instance.chat = AsyncMock(side_effect=capture_chat)
             instance.close = AsyncMock()
-            MockLLM.return_value = instance
+            mock_llm.return_value = instance
 
             await _scan_workspace(Path(tmp), config, "Charlie")
 
@@ -279,8 +282,8 @@ def test_config_command_error():
 def test_memory_command_shows_content():
     """memory command renders memory content."""
     runner = CliRunner()
-    with patch("koi.cli.Memory") as MockMemory:
-        MockMemory.return_value.load.return_value = "## User\n- Name: Alice\n"
+    with patch("koi.cli.Memory") as mock_memory:
+        mock_memory.return_value.load.return_value = "## User\n- Name: Alice\n"
         result = runner.invoke(main, ["memory"])
     assert result.exit_code == 0
     assert "User" in result.output
@@ -289,8 +292,8 @@ def test_memory_command_shows_content():
 def test_memory_command_empty():
     """memory command reports empty when memory contains only whitespace."""
     runner = CliRunner()
-    with patch("koi.cli.Memory") as MockMemory:
-        MockMemory.return_value.load.return_value = "   "
+    with patch("koi.cli.Memory") as mock_memory:
+        mock_memory.return_value.load.return_value = "   "
         result = runner.invoke(main, ["memory"])
     assert result.exit_code == 0
     assert "empty" in result.output.lower()
@@ -308,11 +311,17 @@ def test_memory_command_error():
 def test_skills_command_shows_table():
     """skills command displays available skills."""
     runner = CliRunner()
-    with patch("koi.cli.Config.load") as mock_cfg, \
-         patch("koi.cli.SkillsManager") as MockSM:
+    with (
+        patch("koi.cli.Config.load") as mock_cfg,
+        patch("koi.cli.SkillsManager") as mock_sm,
+    ):
         mock_cfg.return_value = Config(api_base="x", api_key="k", model="m")
-        MockSM.return_value.list_skills.return_value = [
-            {"name": "deploy", "description": "Deploy the app", "path": "/skills/deploy"}
+        mock_sm.return_value.list_skills.return_value = [
+            {
+                "name": "deploy",
+                "description": "Deploy the app",
+                "path": "/skills/deploy",
+            }
         ]
         result = runner.invoke(main, ["skills"])
     assert result.exit_code == 0
@@ -323,10 +332,12 @@ def test_skills_command_long_description_truncated():
     """skills command truncates descriptions longer than 80 chars."""
     runner = CliRunner()
     long_desc = "x" * 100
-    with patch("koi.cli.Config.load") as mock_cfg, \
-         patch("koi.cli.SkillsManager") as MockSM:
+    with (
+        patch("koi.cli.Config.load") as mock_cfg,
+        patch("koi.cli.SkillsManager") as mock_sm,
+    ):
         mock_cfg.return_value = Config(api_base="x", api_key="k", model="m")
-        MockSM.return_value.list_skills.return_value = [
+        mock_sm.return_value.list_skills.return_value = [
             {"name": "big", "description": long_desc, "path": "/skills/big"}
         ]
         result = runner.invoke(main, ["skills"])
@@ -338,10 +349,12 @@ def test_skills_command_long_description_truncated():
 def test_skills_command_empty():
     """skills command reports when no skills are found."""
     runner = CliRunner()
-    with patch("koi.cli.Config.load") as mock_cfg, \
-         patch("koi.cli.SkillsManager") as MockSM:
+    with (
+        patch("koi.cli.Config.load") as mock_cfg,
+        patch("koi.cli.SkillsManager") as mock_sm,
+    ):
         mock_cfg.return_value = Config(api_base="x", api_key="k", model="m")
-        MockSM.return_value.list_skills.return_value = []
+        mock_sm.return_value.list_skills.return_value = []
         result = runner.invoke(main, ["skills"])
     assert result.exit_code == 0
     assert "No skills" in result.output
@@ -359,8 +372,8 @@ def test_skills_command_error():
 def test_add_cron_command_success():
     """cron add calls CronManager.add_job and prints job ID."""
     runner = CliRunner()
-    with patch("koi.cli.CronManager") as MockCron:
-        MockCron.return_value.add_job.return_value = "job-123"
+    with patch("koi.cli.CronManager") as mock_cron:
+        mock_cron.return_value.add_job.return_value = "job-123"
         result = runner.invoke(main, ["cron", "add", "0 9 * * 1", "check things"])
     assert result.exit_code == 0
     assert "job-123" in result.output
@@ -369,8 +382,8 @@ def test_add_cron_command_success():
 def test_add_cron_command_error():
     """cron add handles CronManager exceptions gracefully."""
     runner = CliRunner()
-    with patch("koi.cli.CronManager") as MockCron:
-        MockCron.return_value.add_job.side_effect = RuntimeError("cron broken")
+    with patch("koi.cli.CronManager") as mock_cron:
+        mock_cron.return_value.add_job.side_effect = RuntimeError("cron broken")
         result = runner.invoke(main, ["cron", "add", "bad", "task"])
     assert result.exit_code == 0
     assert "Error" in result.output
@@ -379,9 +392,14 @@ def test_add_cron_command_error():
 def test_list_cron_command_shows_jobs():
     """cron list displays jobs in a table."""
     runner = CliRunner()
-    with patch("koi.cli.CronManager") as MockCron:
-        MockCron.return_value.list_jobs.return_value = [
-            {"id": "job-1", "schedule": "0 9 * * 1", "task": "check things", "active": True}
+    with patch("koi.cli.CronManager") as mock_cron:
+        mock_cron.return_value.list_jobs.return_value = [
+            {
+                "id": "job-1",
+                "schedule": "0 9 * * 1",
+                "task": "check things",
+                "active": True,
+            }
         ]
         result = runner.invoke(main, ["cron", "list"])
     assert result.exit_code == 0
@@ -391,8 +409,8 @@ def test_list_cron_command_shows_jobs():
 def test_list_cron_command_inactive_job():
     """cron list shows inactive status for jobs with active=False."""
     runner = CliRunner()
-    with patch("koi.cli.CronManager") as MockCron:
-        MockCron.return_value.list_jobs.return_value = [
+    with patch("koi.cli.CronManager") as mock_cron:
+        mock_cron.return_value.list_jobs.return_value = [
             {"id": "job-2", "schedule": "0 * * * *", "task": "stuff", "active": False}
         ]
         result = runner.invoke(main, ["cron", "list"])
@@ -403,8 +421,8 @@ def test_list_cron_command_inactive_job():
 def test_list_cron_command_empty():
     """cron list reports when no cron jobs exist."""
     runner = CliRunner()
-    with patch("koi.cli.CronManager") as MockCron:
-        MockCron.return_value.list_jobs.return_value = []
+    with patch("koi.cli.CronManager") as mock_cron:
+        mock_cron.return_value.list_jobs.return_value = []
         result = runner.invoke(main, ["cron", "list"])
     assert result.exit_code == 0
     assert "No cron jobs" in result.output
@@ -422,8 +440,8 @@ def test_list_cron_command_error():
 def test_remove_cron_command_success():
     """cron remove calls CronManager.remove_job and prints job ID."""
     runner = CliRunner()
-    with patch("koi.cli.CronManager") as MockCron:
-        MockCron.return_value.remove_job.return_value = None
+    with patch("koi.cli.CronManager") as mock_cron:
+        mock_cron.return_value.remove_job.return_value = None
         result = runner.invoke(main, ["cron", "remove", "job-123"])
     assert result.exit_code == 0
     assert "job-123" in result.output
@@ -432,8 +450,8 @@ def test_remove_cron_command_success():
 def test_remove_cron_command_error():
     """cron remove handles error gracefully."""
     runner = CliRunner()
-    with patch("koi.cli.CronManager") as MockCron:
-        MockCron.return_value.remove_job.side_effect = RuntimeError("not found")
+    with patch("koi.cli.CronManager") as mock_cron:
+        mock_cron.return_value.remove_job.side_effect = RuntimeError("not found")
         result = runner.invoke(main, ["cron", "remove", "bad-id"])
     assert result.exit_code == 0
     assert "Error" in result.output
@@ -442,7 +460,9 @@ def test_remove_cron_command_error():
 def test_run_command_missing_config():
     """run command prints helpful error when .koi/config.json is missing."""
     runner = CliRunner()
-    with patch("koi.cli.Config.load", side_effect=FileNotFoundError(".koi/config.json")):
+    with patch(
+        "koi.cli.Config.load", side_effect=FileNotFoundError(".koi/config.json")
+    ):
         result = runner.invoke(main, ["run"])
     assert result.exit_code == 0
     assert "koi init" in result.output

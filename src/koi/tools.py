@@ -8,7 +8,8 @@ import re
 import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Any, List, Optional
+from typing import Any
+
 import httpx
 from bs4 import BeautifulSoup
 
@@ -22,24 +23,39 @@ MAX_EXEC_OUTPUT_BYTES = 50_000  # 50KB
 MAX_WEB_FETCH_CHARS = 20_000
 
 
-def get_tool_definitions() -> List[Dict[str, Any]]:
+def get_tool_definitions() -> list[dict[str, Any]]:
     """Get OpenAI-format tool definitions."""
     return [
         {
             "type": "function",
             "function": {
                 "name": "read_file",
-                "description": "Read the contents of a file. Defaults to first 2000 lines / 50KB. Use offset/limit for larger files.",
+                "description": (
+                    "Read the contents of a file. Defaults to "
+                    "first 2000 lines / 50KB. "
+                    "Use offset/limit for larger files."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Path to the file to read"},
-                        "offset": {"type": "integer", "description": "Line number to start reading from (1-indexed)"},
-                        "limit": {"type": "integer", "description": "Maximum number of lines to read"}
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file to read",
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "description": (
+                                "Line number to start reading from (1-indexed)"
+                            ),
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "description": "Maximum number of lines to read",
+                        },
                     },
-                    "required": ["path"]
-                }
-            }
+                    "required": ["path"],
+                },
+            },
         },
         {
             "type": "function",
@@ -49,12 +65,18 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Path to the file to write"},
-                        "content": {"type": "string", "description": "Content to write to the file"}
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file to write",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "Content to write to the file",
+                        },
                     },
-                    "required": ["path", "content"]
-                }
-            }
+                    "required": ["path", "content"],
+                },
+            },
         },
         {
             "type": "function",
@@ -64,75 +86,130 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Path to the file to edit"},
-                        "old_text": {"type": "string", "description": "Exact text to find and replace"},
-                        "new_text": {"type": "string", "description": "New text to replace the old text with"}
+                        "path": {
+                            "type": "string",
+                            "description": "Path to the file to edit",
+                        },
+                        "old_text": {
+                            "type": "string",
+                            "description": "Exact text to find and replace",
+                        },
+                        "new_text": {
+                            "type": "string",
+                            "description": "New text to replace the old text with",
+                        },
                     },
-                    "required": ["path", "old_text", "new_text"]
-                }
-            }
+                    "required": ["path", "old_text", "new_text"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "exec_command",
-                "description": "Execute a shell command and return stdout, stderr, and exit code",
+                "description": (
+                    "Execute a shell command and return stdout, stderr, and exit code"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "command": {"type": "string", "description": "Shell command to execute"},
-                        "cwd": {"type": "string", "description": "Working directory (optional)"},
-                        "timeout": {"type": "integer", "description": "Timeout in seconds (optional, default 30)"}
+                        "command": {
+                            "type": "string",
+                            "description": "Shell command to execute",
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Working directory (optional)",
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Timeout in seconds (optional, default 30)",
+                        },
                     },
-                    "required": ["command"]
-                }
-            }
+                    "required": ["command"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "glob_files",
-                "description": "Find files matching a glob pattern. Faster and safer than exec_command with find.",
+                "description": (
+                    "Find files matching a glob pattern. "
+                    "Faster and safer than exec_command "
+                    "with find."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pattern": {"type": "string", "description": "Glob pattern, e.g. '**/*.py' or 'src/**/*.ts'"},
-                        "base_dir": {"type": "string", "description": "Directory to search in (default: current directory)"}
+                        "pattern": {
+                            "type": "string",
+                            "description": (
+                                "Glob pattern, e.g. '**/*.py' or 'src/**/*.ts'"
+                            ),
+                        },
+                        "base_dir": {
+                            "type": "string",
+                            "description": (
+                                "Directory to search in (default: current directory)"
+                            ),
+                        },
                     },
-                    "required": ["pattern"]
-                }
-            }
+                    "required": ["pattern"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "grep_files",
-                "description": "Search file contents using a regex pattern. Returns matching lines with file path and line number.",
+                "description": (
+                    "Search file contents using a regex "
+                    "pattern. Returns matching lines with "
+                    "file path and line number."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pattern": {"type": "string", "description": "Regex pattern to search for"},
-                        "path": {"type": "string", "description": "File or directory to search (default: current directory)"},
-                        "file_glob": {"type": "string", "description": "Filename filter, e.g. '*.py' or '*.ts'"},
-                        "case_insensitive": {"type": "boolean", "description": "Case-insensitive search (default: false)"}
+                        "pattern": {
+                            "type": "string",
+                            "description": "Regex pattern to search for",
+                        },
+                        "path": {
+                            "type": "string",
+                            "description": (
+                                "File or directory to search "
+                                "(default: current directory)"
+                            ),
+                        },
+                        "file_glob": {
+                            "type": "string",
+                            "description": "Filename filter, e.g. '*.py' or '*.ts'",
+                        },
+                        "case_insensitive": {
+                            "type": "boolean",
+                            "description": "Case-insensitive search (default: false)",
+                        },
                     },
-                    "required": ["pattern"]
-                }
-            }
+                    "required": ["pattern"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "web_search",
-                "description": "Search the web using Brave Search API (placeholder - returns TODO)",
+                "description": (
+                    "Search the web using Brave Search API (placeholder - returns TODO)"
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "query": {"type": "string", "description": "Search query"}
                     },
-                    "required": ["query"]
-                }
-            }
+                    "required": ["query"],
+                },
+            },
         },
         {
             "type": "function",
@@ -144,23 +221,31 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                     "properties": {
                         "url": {"type": "string", "description": "URL to fetch"}
                     },
-                    "required": ["url"]
-                }
-            }
+                    "required": ["url"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "update_memory",
-                "description": "Append important information to persistent memory (.koi/MEMORY.md). Use this to remember preferences, decisions, and context across sessions.",
+                "description": (
+                    "Append important information to "
+                    "persistent memory (.koi/MEMORY.md). "
+                    "Use this to remember preferences, "
+                    "decisions, and context across sessions."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "content": {"type": "string", "description": "Text to append to memory"}
+                        "content": {
+                            "type": "string",
+                            "description": "Text to append to memory",
+                        }
                     },
-                    "required": ["content"]
-                }
-            }
+                    "required": ["content"],
+                },
+            },
         },
         {
             "type": "function",
@@ -170,38 +255,56 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "skill_name": {"type": "string", "description": "Name of the skill to read"}
+                        "skill_name": {
+                            "type": "string",
+                            "description": "Name of the skill to read",
+                        }
                     },
-                    "required": ["skill_name"]
-                }
-            }
+                    "required": ["skill_name"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "add_cron_job",
-                "description": "Add a koi cron job that runs a natural language task on a schedule. The task will be interpreted by koi each time it runs.",
+                "description": (
+                    "Add a koi cron job that runs a natural "
+                    "language task on a schedule. The task "
+                    "will be interpreted by koi each time "
+                    "it runs."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "schedule": {"type": "string", "description": "Cron schedule expression, e.g. '0 * * * *' for every hour"},
-                        "task": {"type": "string", "description": "Natural language task for koi to interpret and execute each time"}
+                        "schedule": {
+                            "type": "string",
+                            "description": (
+                                "Cron schedule expression, "
+                                "e.g. '0 * * * *' for "
+                                "every hour"
+                            ),
+                        },
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                "Natural language task for koi "
+                                "to interpret and execute "
+                                "each time"
+                            ),
+                        },
                     },
-                    "required": ["schedule", "task"]
-                }
-            }
+                    "required": ["schedule", "task"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "list_cron_jobs",
                 "description": "List all registered koi cron jobs.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
         },
         {
             "type": "function",
@@ -211,105 +314,204 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "job_id": {"type": "string", "description": "The job ID to remove"}
+                        "job_id": {
+                            "type": "string",
+                            "description": "The job ID to remove",
+                        }
                     },
-                    "required": ["job_id"]
-                }
-            }
+                    "required": ["job_id"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "remove_file",
-                "description": "Remove a file or directory under .koi/. Only paths within .koi/ are allowed.",
+                "description": (
+                    "Remove a file or directory under .koi/."
+                    " Only paths within .koi/ are allowed."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Path to the file or directory to remove (must be under .koi/)"}
+                        "path": {
+                            "type": "string",
+                            "description": (
+                                "Path to the file or directory "
+                                "to remove (must be under .koi/)"
+                            ),
+                        }
                     },
-                    "required": ["path"]
-                }
-            }
+                    "required": ["path"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "create_alert",
-                "description": "Create a structured alert with severity and proposed fix. Saves to .koi/alerts/ and sends a desktop notification.",
+                "description": (
+                    "Create a structured alert with severity"
+                    " and proposed fix. Saves to "
+                    ".koi/alerts/ and sends a desktop "
+                    "notification."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
                         "title": {"type": "string", "description": "Alert title"},
-                        "summary": {"type": "string", "description": "Description of the issue"},
-                        "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "Alert severity"},
-                        "proposed_fix": {"type": "string", "description": "Suggested fix for the issue"},
-                        "fix_command": {"type": "string", "description": "Optional shell command to apply the fix"}
+                        "summary": {
+                            "type": "string",
+                            "description": "Description of the issue",
+                        },
+                        "severity": {
+                            "type": "string",
+                            "enum": ["low", "medium", "high", "critical"],
+                            "description": "Alert severity",
+                        },
+                        "proposed_fix": {
+                            "type": "string",
+                            "description": "Suggested fix for the issue",
+                        },
+                        "fix_command": {
+                            "type": "string",
+                            "description": "Optional shell command to apply the fix",
+                        },
                     },
-                    "required": ["title", "summary", "severity", "proposed_fix"]
-                }
-            }
+                    "required": ["title", "summary", "severity", "proposed_fix"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "list_alerts",
-                "description": "List alerts filtered by status (pending/approved/dismissed).",
+                "description": (
+                    "List alerts filtered by status (pending/approved/dismissed)."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "status": {"type": "string", "enum": ["pending", "approved", "dismissed"], "description": "Filter by status (default: pending)"}
+                        "status": {
+                            "type": "string",
+                            "enum": ["pending", "approved", "dismissed"],
+                            "description": "Filter by status (default: pending)",
+                        }
                     },
-                    "required": []
-                }
-            }
+                    "required": [],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "resolve_alert",
-                "description": "Resolve an alert by approving or dismissing it. If approved and a fix_command exists, returns the command without executing it.",
+                "description": (
+                    "Resolve an alert by approving or "
+                    "dismissing it. If approved and a "
+                    "fix_command exists, returns the "
+                    "command without executing it."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "alert_file": {"type": "string", "description": "Alert filename or path"},
-                        "resolution": {"type": "string", "enum": ["approved", "dismissed"], "description": "Resolution action"}
+                        "alert_file": {
+                            "type": "string",
+                            "description": "Alert filename or path",
+                        },
+                        "resolution": {
+                            "type": "string",
+                            "enum": ["approved", "dismissed"],
+                            "description": "Resolution action",
+                        },
                     },
-                    "required": ["alert_file", "resolution"]
-                }
-            }
+                    "required": ["alert_file", "resolution"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "spawn_subagent",
-                "description": "Spawn a Koi sub-agent. mode='run' (default) runs a one-shot task. mode='session' starts a persistent session you can send follow-up messages to.",
+                "description": (
+                    "Spawn a Koi sub-agent. mode='run' "
+                    "(default) runs a one-shot task. "
+                    "mode='session' starts a persistent "
+                    "session you can send follow-up "
+                    "messages to."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "task": {"type": "string", "description": "Natural language task for the sub-agent to execute (required for mode=run, ignored for mode=session)"},
-                        "label": {"type": "string", "description": "Short label for display/addressing (required for mode=session)"},
-                        "mode": {"type": "string", "enum": ["run", "session"], "description": "run=one-shot task, session=persistent (default: run)"},
-                        "agent": {"type": "string", "description": "Agent to use: koi (default, native), claude-code, codex, gemini, opencode, goose (any ACP agent)"},
-                        "model": {"type": "string", "description": "Override model for this sub-agent"},
-                        "thinking": {"type": "string", "description": "Thinking level for sub-agent (off/minimal/low/medium/high)"},
-                        "timeout_seconds": {"type": "integer", "description": "Kill sub-agent after this many seconds (0 = no timeout)"},
-                        "cwd": {"type": "string", "description": "Working directory for the sub-agent"}
+                        "task": {
+                            "type": "string",
+                            "description": (
+                                "Natural language task for the "
+                                "sub-agent to execute (required "
+                                "for mode=run, ignored for "
+                                "mode=session)"
+                            ),
+                        },
+                        "label": {
+                            "type": "string",
+                            "description": (
+                                "Short label for display/"
+                                "addressing (required for "
+                                "mode=session)"
+                            ),
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["run", "session"],
+                            "description": (
+                                "run=one-shot task, session=persistent (default: run)"
+                            ),
+                        },
+                        "agent": {
+                            "type": "string",
+                            "description": (
+                                "Agent to use: koi (default, "
+                                "native), claude-code, codex, "
+                                "gemini, opencode, goose "
+                                "(any ACP agent)"
+                            ),
+                        },
+                        "model": {
+                            "type": "string",
+                            "description": "Override model for this sub-agent",
+                        },
+                        "thinking": {
+                            "type": "string",
+                            "description": (
+                                "Thinking level for sub-agent "
+                                "(off/minimal/low/medium/high)"
+                            ),
+                        },
+                        "timeout_seconds": {
+                            "type": "integer",
+                            "description": (
+                                "Kill sub-agent after this "
+                                "many seconds (0 = no timeout)"
+                            ),
+                        },
+                        "cwd": {
+                            "type": "string",
+                            "description": "Working directory for the sub-agent",
+                        },
                     },
-                    "required": ["task"]
-                }
-            }
+                    "required": ["task"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "list_subagents",
-                "description": "List all active and completed sub-agents with their status.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
+                "description": (
+                    "List all active and completed sub-agents with their status."
+                ),
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
         },
         {
             "type": "function",
@@ -319,52 +521,70 @@ def get_tool_definitions() -> List[Dict[str, Any]]:
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "run_id": {"type": "string", "description": "The run ID of the sub-agent to kill"}
+                        "run_id": {
+                            "type": "string",
+                            "description": "The run ID of the sub-agent to kill",
+                        }
                     },
-                    "required": ["run_id"]
-                }
-            }
+                    "required": ["run_id"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "send_to_subagent",
-                "description": "Send a follow-up message to a persistent subagent session and get its response.",
+                "description": (
+                    "Send a follow-up message to a "
+                    "persistent subagent session and "
+                    "get its response."
+                ),
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "target": {"type": "string", "description": "Label or run_id of the persistent session"},
-                        "message": {"type": "string", "description": "Message to send to the subagent"}
+                        "target": {
+                            "type": "string",
+                            "description": "Label or run_id of the persistent session",
+                        },
+                        "message": {
+                            "type": "string",
+                            "description": "Message to send to the subagent",
+                        },
                     },
-                    "required": ["target", "message"]
-                }
-            }
+                    "required": ["target", "message"],
+                },
+            },
         },
         {
             "type": "function",
             "function": {
                 "name": "list_available_agents",
-                "description": "List ACP-compatible agents installed on this system (claude-code, codex, gemini, etc.).",
-                "parameters": {
-                    "type": "object",
-                    "properties": {},
-                    "required": []
-                }
-            }
-        }
+                "description": (
+                    "List ACP-compatible agents installed "
+                    "on this system (claude-code, codex, "
+                    "gemini, etc.)."
+                ),
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            },
+        },
     ]
 
 
 class ToolExecutor:
     """Execute tool calls and return results."""
 
-    def __init__(self, skills_manager: SkillsManager, sandbox: Sandbox = None, subagent_manager=None):
+    def __init__(
+        self,
+        skills_manager: SkillsManager,
+        sandbox: Sandbox = None,
+        subagent_manager=None,
+    ):
         """Initialize tool executor with skills manager and sandbox."""
         self.skills_manager = skills_manager
         self.sandbox = sandbox or Sandbox()
         self.subagent_manager = subagent_manager
-    
-    async def execute_tool(self, tool_call: Dict[str, Any]) -> Dict[str, Any]:
+
+    async def execute_tool(self, tool_call: dict[str, Any]) -> dict[str, Any]:
         """Execute a tool call and return the result."""
         function_name = tool_call["function"]["name"].replace("-", "_")
 
@@ -372,11 +592,8 @@ class ToolExecutor:
             raw_args = tool_call["function"].get("arguments", "{}") or "{}"
             arguments = json.loads(raw_args)
         except json.JSONDecodeError as e:
-            return {
-                "error": f"Failed to parse arguments: {e}",
-                "success": False
-            }
-        
+            return {"error": f"Failed to parse arguments: {e}", "success": False}
+
         try:
             if function_name == "read_file":
                 return await self._read_file(**arguments)
@@ -423,21 +640,17 @@ class ToolExecutor:
             elif function_name == "list_available_agents":
                 return await self._list_available_agents()
             else:
-                return {
-                    "error": f"Unknown function: {function_name}",
-                    "success": False
-                }
-        
+                return {"error": f"Unknown function: {function_name}", "success": False}
+
         except asyncio.CancelledError:
             raise
 
         except Exception as e:
-            return {
-                "error": f"Tool execution failed: {e}",
-                "success": False
-            }
-    
-    async def _read_file(self, path: str, offset: Optional[int] = None, limit: Optional[int] = None) -> Dict[str, Any]:
+            return {"error": f"Tool execution failed: {e}", "success": False}
+
+    async def _read_file(
+        self, path: str, offset: int | None = None, limit: int | None = None
+    ) -> dict[str, Any]:
         """Read file contents with optional offset and limit."""
         try:
             allowed, reason = self.sandbox.check_read(path)
@@ -452,7 +665,7 @@ class ToolExecutor:
             if not file_path.is_file():
                 return {"error": f"Path is not a file: {path}", "success": False}
 
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(file_path, encoding="utf-8") as f:
                 all_lines = f.readlines()
 
             total_lines = len(all_lines)
@@ -460,7 +673,7 @@ class ToolExecutor:
 
             # Apply offset
             if offset:
-                lines = lines[offset - 1:]  # Convert to 0-indexed
+                lines = lines[offset - 1 :]  # Convert to 0-indexed
 
             # Apply limit: use explicit limit if provided, otherwise default
             explicit_limit = limit is not None
@@ -483,18 +696,18 @@ class ToolExecutor:
 
             # Add truncation notice
             if truncated_by_lines or truncated_by_bytes:
-                content += f"\n[output truncated: {len(lines)} of {total_lines} lines shown. Use offset/limit for more.]"
+                content += (
+                    f"\n[output truncated: {len(lines)} "
+                    f"of {total_lines} lines shown. "
+                    f"Use offset/limit for more.]"
+                )
 
-            return {
-                "content": content,
-                "lines_read": len(lines),
-                "success": True
-            }
+            return {"content": content, "lines_read": len(lines), "success": True}
 
         except Exception as e:
             return {"error": str(e), "success": False}
-    
-    async def _write_file(self, path: str, content: str) -> Dict[str, Any]:
+
+    async def _write_file(self, path: str, content: str) -> dict[str, Any]:
         """Write content to file."""
         try:
             allowed, reason = self.sandbox.check_write(path)
@@ -502,22 +715,24 @@ class ToolExecutor:
                 return {"error": reason, "success": False}
 
             file_path = Path(path)
-            
+
             # Create parent directories if needed
             file_path.parent.mkdir(parents=True, exist_ok=True)
-            
+
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(content)
-            
+
             return {
                 "message": f"Successfully wrote {len(content)} characters to {path}",
-                "success": True
+                "success": True,
             }
-        
+
         except Exception as e:
             return {"error": str(e), "success": False}
-    
-    async def _edit_file(self, path: str, old_text: str, new_text: str) -> Dict[str, Any]:
+
+    async def _edit_file(
+        self, path: str, old_text: str, new_text: str
+    ) -> dict[str, Any]:
         """Make surgical edit to file."""
         try:
             allowed, reason = self.sandbox.check_write(path)
@@ -525,16 +740,19 @@ class ToolExecutor:
                 return {"error": reason, "success": False}
 
             file_path = Path(path)
-            
+
             if not file_path.exists():
                 return {"error": f"File not found: {path}", "success": False}
-            
-            with open(file_path, "r", encoding="utf-8") as f:
+
+            with open(file_path, encoding="utf-8") as f:
                 content = f.read()
-            
+
             if old_text not in content:
-                return {"error": f"Text not found in file: {old_text[:100]}...", "success": False}
-            
+                return {
+                    "error": f"Text not found in file: {old_text[:100]}...",
+                    "success": False,
+                }
+
             # Find the line number where the change occurs
             lines = content.splitlines(keepends=True)
             line_num = None
@@ -542,13 +760,13 @@ class ToolExecutor:
                 if old_text in line:
                     line_num = i + 1  # 1-indexed
                     break
-            
+
             # Replace first occurrence
             new_content = content.replace(old_text, new_text, 1)
-            
+
             with open(file_path, "w", encoding="utf-8") as f:
                 f.write(new_content)
-            
+
             # Create a visual diff-like output
             diff_lines = []
             if line_num and len(old_text) < 200 and len(new_text) < 200:
@@ -558,17 +776,22 @@ class ToolExecutor:
                 diff_msg = "\n".join(diff_lines)
             else:
                 # For longer text, show a summary
-                diff_msg = f"Replaced {len(old_text)} characters with {len(new_text)} characters"
-            
+                diff_msg = (
+                    f"Replaced {len(old_text)} characters "
+                    f"with {len(new_text)} characters"
+                )
+
             return {
                 "message": f"Successfully edited {path}\n{diff_msg}",
-                "success": True
+                "success": True,
             }
-        
+
         except Exception as e:
             return {"error": str(e), "success": False}
-    
-    async def _exec_command(self, command: str, cwd: Optional[str] = None, timeout: Optional[int] = None) -> Dict[str, Any]:
+
+    async def _exec_command(
+        self, command: str, cwd: str | None = None, timeout: int | None = None
+    ) -> dict[str, Any]:
         """Execute shell command with sandbox restrictions."""
         # Check command against sandbox rules
         allowed, reason, needs_confirm = self.sandbox.check_command(command)
@@ -578,7 +801,7 @@ class ToolExecutor:
             return {
                 "error": f"Command requires confirmation: {command}\n{reason}",
                 "needs_confirmation": True,
-                "success": False
+                "success": False,
             }
 
         timeout = timeout or 60
@@ -610,7 +833,7 @@ class ToolExecutor:
                     process.kill()
                 return {
                     "error": f"Command timed out after {timeout} seconds",
-                    "success": False
+                    "success": False,
                 }
 
             stdout = stdout_bytes.decode("utf-8", errors="replace")
@@ -652,13 +875,25 @@ class ToolExecutor:
 
         except Exception as e:
             return {"error": str(e), "success": False}
-    
-    _SKIP_DIRS = frozenset({
-        ".git", "node_modules", "__pycache__", ".venv", "venv",
-        ".tox", "dist", "build", ".mypy_cache", ".pytest_cache",
-    })
 
-    async def _glob_files(self, pattern: str, base_dir: Optional[str] = None) -> Dict[str, Any]:
+    _SKIP_DIRS = frozenset(
+        {
+            ".git",
+            "node_modules",
+            "__pycache__",
+            ".venv",
+            "venv",
+            ".tox",
+            "dist",
+            "build",
+            ".mypy_cache",
+            ".pytest_cache",
+        }
+    )
+
+    async def _glob_files(
+        self, pattern: str, base_dir: str | None = None
+    ) -> dict[str, Any]:
         """Find files matching a glob pattern."""
         try:
             base = Path(base_dir) if base_dir else Path.cwd()
@@ -689,10 +924,10 @@ class ToolExecutor:
     async def _grep_files(
         self,
         pattern: str,
-        path: Optional[str] = None,
-        file_glob: Optional[str] = None,
+        path: str | None = None,
+        file_glob: str | None = None,
         case_insensitive: bool = False,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Search file contents using a regex pattern."""
         try:
             base = Path(path) if path else Path.cwd()
@@ -706,7 +941,7 @@ class ToolExecutor:
             except re.error as e:
                 return {"error": f"Invalid regex: {e}", "success": False}
 
-            MAX_MATCHES = 200
+            max_matches = 200
 
             def _candidate_files():
                 if base.is_file():
@@ -714,149 +949,165 @@ class ToolExecutor:
                 else:
                     glob_pat = file_glob or "*"
                     for p in sorted(base.rglob(glob_pat)):
-                        if p.is_file() and not any(part in self._SKIP_DIRS for part in p.parts):
+                        if p.is_file() and not any(
+                            part in self._SKIP_DIRS for part in p.parts
+                        ):
                             yield p
 
             matches = []
             for file_path in _candidate_files():
-                if len(matches) >= MAX_MATCHES:
+                if len(matches) >= max_matches:
                     break
                 try:
                     text = file_path.read_text(encoding="utf-8", errors="strict")
                 except (UnicodeDecodeError, OSError):
                     continue
-                rel = str(file_path.relative_to(base)) if not base.is_file() else str(file_path)
+                rel = (
+                    str(file_path.relative_to(base))
+                    if not base.is_file()
+                    else str(file_path)
+                )
                 for lineno, line in enumerate(text.splitlines(), 1):
                     if compiled.search(line):
-                        matches.append({"file": rel, "line": lineno, "text": line[:200]})
-                        if len(matches) >= MAX_MATCHES:
+                        matches.append(
+                            {"file": rel, "line": lineno, "text": line[:200]}
+                        )
+                        if len(matches) >= max_matches:
                             break
 
             return {
                 "matches": matches,
                 "count": len(matches),
-                "truncated": len(matches) == MAX_MATCHES,
+                "truncated": len(matches) == max_matches,
                 "success": True,
             }
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _web_search(self, query: str) -> Dict[str, Any]:
+    async def _web_search(self, query: str) -> dict[str, Any]:
         """Placeholder for web search - returns TODO."""
         return {
             "message": f"TODO: Implement web search for query: {query}",
             "results": [],
-            "success": True
+            "success": True,
         }
-    
-    async def _web_fetch(self, url: str) -> Dict[str, Any]:
+
+    async def _web_fetch(self, url: str) -> dict[str, Any]:
         """Fetch URL content and convert to markdown."""
         try:
             async with httpx.AsyncClient() as client:
                 response = await client.get(url, timeout=30.0)
                 response.raise_for_status()
-                
+
                 # Parse HTML and extract text
-                soup = BeautifulSoup(response.text, 'html.parser')
-                
+                soup = BeautifulSoup(response.text, "html.parser")
+
                 # Remove script and style elements
                 for script in soup(["script", "style"]):
                     script.decompose()
-                
+
                 # Get text content
                 text = soup.get_text()
-                
+
                 # Clean up whitespace
                 lines = (line.strip() for line in text.splitlines())
-                chunks = (phrase.strip() for line in lines for phrase in line.split("  "))
-                text = ' '.join(chunk for chunk in chunks if chunk)
-                
+                chunks = (
+                    phrase.strip() for line in lines for phrase in line.split("  ")
+                )
+                text = " ".join(chunk for chunk in chunks if chunk)
+
                 # Simple markdown conversion
-                title = soup.find('title')
+                title = soup.find("title")
                 if title:
                     text = f"# {title.get_text().strip()}\n\n{text}"
-                
+
                 truncated = len(text) > MAX_WEB_FETCH_CHARS
                 content = text[:MAX_WEB_FETCH_CHARS]
                 if truncated:
-                    content += f"\n[output truncated: showing first {MAX_WEB_FETCH_CHARS} of {len(text)} chars]"
+                    content += (
+                        f"\n[output truncated: showing first "
+                        f"{MAX_WEB_FETCH_CHARS} of "
+                        f"{len(text)} chars]"
+                    )
 
-                return {
-                    "content": content,
-                    "url": url,
-                    "success": True
-                }
-        
+                return {"content": content, "url": url, "success": True}
+
         except Exception as e:
             return {"error": str(e), "success": False}
-    
-    async def _update_memory(self, content: str) -> Dict[str, Any]:
+
+    async def _update_memory(self, content: str) -> dict[str, Any]:
         """Append content to persistent memory."""
         try:
             from .memory import Memory
+
             memory = Memory()
             memory.append(content)
             return {
-                "message": f"Added to memory: {content[:100]}{'...' if len(content) > 100 else ''}",
-                "success": True
+                "message": (
+                    f"Added to memory: {content[:100]}"
+                    f"{'...' if len(content) > 100 else ''}"
+                ),
+                "success": True,
             }
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _read_skill(self, skill_name: str) -> Dict[str, Any]:
+    async def _read_skill(self, skill_name: str) -> dict[str, Any]:
         """Read skill content by name."""
         try:
             content = self.skills_manager.read_skill(skill_name)
-            
-            return {
-                "content": content,
-                "skill_name": skill_name,
-                "success": True
-            }
-        
+
+            return {"content": content, "skill_name": skill_name, "success": True}
+
         except FileNotFoundError as e:
             return {"error": str(e), "success": False}
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _add_cron_job(self, schedule: str, task: str) -> Dict[str, Any]:
+    async def _add_cron_job(self, schedule: str, task: str) -> dict[str, Any]:
         """Add a cron job via CronManager directly."""
         try:
             from .cron import CronManager
+
             cron_manager = CronManager()
             job_id = cron_manager.add_job(schedule, task)
             return {
-                "message": f"Cron job added (ID: {job_id}). Schedule: {schedule}. Task: {task}",
+                "message": (
+                    f"Cron job added (ID: {job_id}). Schedule: {schedule}. Task: {task}"
+                ),
                 "job_id": job_id,
-                "success": True
+                "success": True,
             }
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _list_cron_jobs(self) -> Dict[str, Any]:
+    async def _list_cron_jobs(self) -> dict[str, Any]:
         """List all cron jobs."""
         try:
             from .cron import CronManager
+
             cron_manager = CronManager()
             jobs = cron_manager.list_jobs()
             return {"jobs": jobs, "count": len(jobs), "success": True}
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _remove_cron_job(self, job_id: str) -> Dict[str, Any]:
+    async def _remove_cron_job(self, job_id: str) -> dict[str, Any]:
         """Remove a cron job by ID."""
         try:
             from .cron import CronManager
+
             cron_manager = CronManager()
             cron_manager.remove_job(job_id)
             return {"message": f"Cron job {job_id} removed.", "success": True}
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _remove_file(self, path: str) -> Dict[str, Any]:
+    async def _remove_file(self, path: str) -> dict[str, Any]:
         """Remove a file or directory, restricted to .koi/."""
         try:
             import shutil
+
             target = Path(path)
             if not target.is_absolute():
                 target = (Path.cwd() / target).resolve()
@@ -867,7 +1118,10 @@ class ToolExecutor:
             try:
                 target.relative_to(koi_dir)
             except ValueError:
-                return {"error": f"Access denied: can only remove paths under .koi/", "success": False}
+                return {
+                    "error": "Access denied: can only remove paths under .koi/",
+                    "success": False,
+                }
 
             if not target.exists():
                 return {"error": f"Path not found: {path}", "success": False}
@@ -893,29 +1147,44 @@ class ToolExecutor:
             system = platform.system()
             if system == "Darwin":
                 subprocess.run(
-                    ["osascript", "-e", f'display notification "{message}" with title "{title}"'],
-                    capture_output=True, timeout=5
+                    [
+                        "osascript",
+                        "-e",
+                        f'display notification "{message}" with title "{title}"',
+                    ],
+                    capture_output=True,
+                    timeout=5,
                 )
             elif system == "Linux" and os.environ.get("DISPLAY"):
                 subprocess.run(
-                    ["notify-send", title, message],
-                    capture_output=True, timeout=5
+                    ["notify-send", title, message], capture_output=True, timeout=5
                 )
         except Exception:
             pass  # Silently skip if notification fails
 
-    async def _create_alert(self, title: str, summary: str, severity: str, proposed_fix: str, fix_command: str = None) -> Dict[str, Any]:
+    async def _create_alert(
+        self,
+        title: str,
+        summary: str,
+        severity: str,
+        proposed_fix: str,
+        fix_command: str = None,
+    ) -> dict[str, Any]:
         """Create a structured alert file."""
         try:
             now = datetime.now()
             timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
-            sanitized = re.sub(r'[^a-z0-9]+', '_', title.lower()).strip('_')
+            sanitized = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_")
             filename = f"{now.strftime('%Y-%m-%d_%H-%M')}_{sanitized}.md"
-            
+
             alerts_dir = self._get_alerts_dir()
             file_path = alerts_dir / filename
-            
-            fix_line = f"- **Fix Command:** `{fix_command}`" if fix_command else "- **Fix Command:** N/A"
+
+            fix_line = (
+                f"- **Fix Command:** `{fix_command}`"
+                if fix_command
+                else "- **Fix Command:** N/A"
+            )
             content = f"""# {title}
 - **Status:** pending
 - **Severity:** {severity}
@@ -926,74 +1195,99 @@ class ToolExecutor:
 """
             file_path.write_text(content, encoding="utf-8")
             self._send_desktop_notification(f"Koi Alert [{severity.upper()}]", title)
-            
-            return {"message": f"Alert created: {file_path}", "file": str(file_path), "success": True}
+
+            return {
+                "message": f"Alert created: {file_path}",
+                "file": str(file_path),
+                "success": True,
+            }
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _list_alerts(self, status: str = "pending") -> Dict[str, Any]:
+    async def _list_alerts(self, status: str = "pending") -> dict[str, Any]:
         """List alerts filtered by status."""
         try:
             alerts_dir = self._get_alerts_dir()
             alerts = []
             for f in sorted(alerts_dir.glob("*.md")):
                 text = f.read_text(encoding="utf-8")
-                status_match = re.search(r'\*\*Status:\*\*\s*(\w+)', text)
+                status_match = re.search(r"\*\*Status:\*\*\s*(\w+)", text)
                 file_status = status_match.group(1) if status_match else "unknown"
                 if file_status != status:
                     continue
-                title_match = re.search(r'^#\s+(.+)', text, re.MULTILINE)
-                severity_match = re.search(r'\*\*Severity:\*\*\s*(\w+)', text)
-                detected_match = re.search(r'\*\*Detected:\*\*\s*(.+)', text)
-                summary_match = re.search(r'\*\*Summary:\*\*\s*(.+)', text)
-                alerts.append({
-                    "title": title_match.group(1) if title_match else f.stem,
-                    "severity": severity_match.group(1) if severity_match else "unknown",
-                    "detected": detected_match.group(1).strip() if detected_match else "unknown",
-                    "summary": summary_match.group(1).strip() if summary_match else "",
-                    "file": f.name
-                })
-            return {"alerts": alerts, "count": len(alerts), "status_filter": status, "success": True}
+                title_match = re.search(r"^#\s+(.+)", text, re.MULTILINE)
+                severity_match = re.search(r"\*\*Severity:\*\*\s*(\w+)", text)
+                detected_match = re.search(r"\*\*Detected:\*\*\s*(.+)", text)
+                summary_match = re.search(r"\*\*Summary:\*\*\s*(.+)", text)
+                alerts.append(
+                    {
+                        "title": title_match.group(1) if title_match else f.stem,
+                        "severity": severity_match.group(1)
+                        if severity_match
+                        else "unknown",
+                        "detected": detected_match.group(1).strip()
+                        if detected_match
+                        else "unknown",
+                        "summary": summary_match.group(1).strip()
+                        if summary_match
+                        else "",
+                        "file": f.name,
+                    }
+                )
+            return {
+                "alerts": alerts,
+                "count": len(alerts),
+                "status_filter": status,
+                "success": True,
+            }
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _resolve_alert(self, alert_file: str, resolution: str) -> Dict[str, Any]:
+    async def _resolve_alert(self, alert_file: str, resolution: str) -> dict[str, Any]:
         """Resolve an alert by updating its status."""
         try:
             alerts_dir = self._get_alerts_dir()
             file_path = alerts_dir / Path(alert_file).name
             if not file_path.exists():
-                return {"error": f"Alert file not found: {alert_file}", "success": False}
+                return {
+                    "error": f"Alert file not found: {alert_file}",
+                    "success": False,
+                }
 
             text = file_path.read_text(encoding="utf-8")
-            new_text = re.sub(r'(\*\*Status:\*\*\s*)\w+', f'\\1{resolution}', text)
+            new_text = re.sub(r"(\*\*Status:\*\*\s*)\w+", f"\\1{resolution}", text)
             file_path.write_text(new_text, encoding="utf-8")
 
-            result = {"message": f"Alert resolved as {resolution}: {file_path.name}", "success": True}
+            result = {
+                "message": f"Alert resolved as {resolution}: {file_path.name}",
+                "success": True,
+            }
 
             if resolution == "approved":
-                cmd_match = re.search(r'\*\*Fix Command:\*\*\s*`([^`]+)`', text)
+                cmd_match = re.search(r"\*\*Fix Command:\*\*\s*`([^`]+)`", text)
                 if cmd_match and cmd_match.group(1) != "N/A":
                     result["fix_command"] = cmd_match.group(1)
-                    result["message"] += f"\nFix command available: {cmd_match.group(1)}"
+                    result["message"] += (
+                        f"\nFix command available: {cmd_match.group(1)}"
+                    )
 
             return result
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    # ── Sub-agent tools ─────────────────────────────────────────
+    # ── Sub-agent tools ────────────────────────────────────
 
     async def _spawn_subagent(
         self,
         task: str = "",
-        label: Optional[str] = None,
+        label: str | None = None,
         mode: str = "run",
         agent: str = "koi",
-        model: Optional[str] = None,
-        thinking: Optional[str] = None,
+        model: str | None = None,
+        thinking: str | None = None,
         timeout_seconds: int = 0,
-        cwd: Optional[str] = None,
-    ) -> Dict[str, Any]:
+        cwd: str | None = None,
+    ) -> dict[str, Any]:
         """Spawn a sub-agent (native koi or ACP agent)."""
         if self.subagent_manager is None:
             return {"error": "Sub-agent spawning is not available", "success": False}
@@ -1003,12 +1297,20 @@ class ToolExecutor:
                 if not label:
                     label = agent
                 result = await self.subagent_manager.spawn_acp_session(
-                    agent_name=agent, label=label, cwd=cwd,
+                    agent_name=agent,
+                    label=label,
+                    cwd=cwd,
                 )
                 if result["status"] == "error":
                     return {"error": result["error"], "success": False}
                 return {
-                    "message": f"ACP session '{label}' started with {agent} (id={result['run_id']}). Use send_to_subagent to communicate.",
+                    "message": (
+                        f"ACP session '{label}' started "
+                        f"with {agent} "
+                        f"(id={result['run_id']}). "
+                        f"Use send_to_subagent to "
+                        f"communicate."
+                    ),
                     "run_id": result["run_id"],
                     "label": label,
                     "agent": agent,
@@ -1018,14 +1320,25 @@ class ToolExecutor:
             # Native koi: session mode
             if mode == "session":
                 if not label:
-                    return {"error": "label is required for mode=session", "success": False}
+                    return {
+                        "error": "label is required for mode=session",
+                        "success": False,
+                    }
                 result = await self.subagent_manager.spawn_session(
-                    label=label, model=model, thinking=thinking, cwd=cwd,
+                    label=label,
+                    model=model,
+                    thinking=thinking,
+                    cwd=cwd,
                 )
                 if result["status"] == "error":
                     return {"error": result["error"], "success": False}
                 return {
-                    "message": f"Persistent session '{label}' started (id={result['run_id']}). Use send_to_subagent to communicate.",
+                    "message": (
+                        f"Persistent session '{label}' "
+                        f"started (id={result['run_id']}). "
+                        f"Use send_to_subagent to "
+                        f"communicate."
+                    ),
                     "run_id": result["run_id"],
                     "label": label,
                     "success": True,
@@ -1034,8 +1347,12 @@ class ToolExecutor:
                 if not task:
                     return {"error": "task is required for mode=run", "success": False}
                 result = await self.subagent_manager.spawn(
-                    task=task, label=label, model=model, thinking=thinking,
-                    timeout_seconds=timeout_seconds, cwd=cwd,
+                    task=task,
+                    label=label,
+                    model=model,
+                    thinking=thinking,
+                    timeout_seconds=timeout_seconds,
+                    cwd=cwd,
                 )
                 if result["status"] == "error":
                     return {"error": result["error"], "success": False}
@@ -1047,7 +1364,7 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _send_to_subagent(self, target: str, message: str) -> Dict[str, Any]:
+    async def _send_to_subagent(self, target: str, message: str) -> dict[str, Any]:
         """Send a message to a persistent subagent session."""
         if self.subagent_manager is None:
             return {"error": "Sub-agent spawning is not available", "success": False}
@@ -1063,9 +1380,10 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _list_available_agents(self) -> Dict[str, Any]:
+    async def _list_available_agents(self) -> dict[str, Any]:
         """List available ACP agents."""
         from .acp_registry import list_agents
+
         try:
             agents = list_agents()
             return {
@@ -1082,7 +1400,7 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _list_subagents(self) -> Dict[str, Any]:
+    async def _list_subagents(self) -> dict[str, Any]:
         """List active and completed sub-agents."""
         if self.subagent_manager is None:
             return {"error": "Sub-agent spawning is not available", "success": False}
@@ -1092,7 +1410,7 @@ class ToolExecutor:
         except Exception as e:
             return {"error": str(e), "success": False}
 
-    async def _kill_subagent(self, run_id: str) -> Dict[str, Any]:
+    async def _kill_subagent(self, run_id: str) -> dict[str, Any]:
         """Kill a running sub-agent."""
         if self.subagent_manager is None:
             return {"error": "Sub-agent spawning is not available", "success": False}

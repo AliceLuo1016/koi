@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Dict, Optional
 
 from .agent import Agent
 from .channels.base import InboundMessage
@@ -50,8 +49,8 @@ class SessionManager:
 
     def __init__(self, config: Config):
         self.config = config
-        self._sessions: Dict[str, Session] = {}
-        self._cleanup_task: Optional[asyncio.Task] = None
+        self._sessions: dict[str, Session] = {}
+        self._cleanup_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """Start the background idle-cleanup loop."""
@@ -80,7 +79,8 @@ class SessionManager:
         return self._sessions[session_key]
 
     async def route_message(self, msg: InboundMessage) -> str:
-        """Route an inbound message to the appropriate session and return the response."""
+        """Route an inbound message to the appropriate session
+        and return the response."""
         session = self.get_or_create(msg.session_key)
         return await session.handle_message(msg.text)
 
@@ -99,9 +99,7 @@ class SessionManager:
             await asyncio.sleep(60)
             now = time.monotonic()
             expired = [
-                k
-                for k, s in self._sessions.items()
-                if (now - s.last_active) > max_idle
+                k for k, s in self._sessions.items() if (now - s.last_active) > max_idle
             ]
             for key in expired:
                 session = self._sessions.pop(key, None)

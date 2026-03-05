@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 from .base import Channel, InboundMessage, OutboundMessage
 
@@ -17,10 +17,10 @@ logger = logging.getLogger(__name__)
 def _import_slack_sdk():
     """Lazy-import slack_sdk so the rest of koi works without the server extra."""
     try:
-        from slack_sdk.web.async_client import AsyncWebClient
         from slack_sdk.socket_mode.aiohttp import SocketModeClient
         from slack_sdk.socket_mode.request import SocketModeRequest
         from slack_sdk.socket_mode.response import SocketModeResponse
+        from slack_sdk.web.async_client import AsyncWebClient
 
         return AsyncWebClient, SocketModeClient, SocketModeRequest, SocketModeResponse
     except ImportError:
@@ -52,14 +52,14 @@ class SlackChannel(Channel):
         mention_only_in_channels: bool = True,
         ack_reaction: str = "eyes",
     ):
-        AsyncWebClient, SocketModeClient, _, _ = _import_slack_sdk()
+        AsyncWebClient, SocketModeClient, _, _ = _import_slack_sdk()  # noqa: N806
 
         self._web = AsyncWebClient(token=bot_token)
         self._socket = SocketModeClient(app_token=app_token, web_client=self._web)
         self._session_manager = session_manager
         self._mention_only = mention_only_in_channels
         self._ack_reaction = ack_reaction
-        self._bot_user_id: Optional[str] = None
+        self._bot_user_id: str | None = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -105,7 +105,7 @@ class SlackChannel(Channel):
 
     async def _on_socket_event(self, client, req) -> None:
         """Handle a raw Socket Mode request."""
-        _, _, SocketModeRequest, SocketModeResponse = _import_slack_sdk()
+        _, _, SocketModeRequest, SocketModeResponse = _import_slack_sdk()  # noqa: N806
 
         # Always ack immediately to avoid Slack retries
         response = SocketModeResponse(envelope_id=req.envelope_id)
@@ -144,9 +144,8 @@ class SlackChannel(Channel):
             return
 
         is_dm = channel_type == "im"
-        is_mention = (
-            event_type == "app_mention"
-            or (self._bot_user_id and f"<@{self._bot_user_id}>" in text)
+        is_mention = event_type == "app_mention" or (
+            self._bot_user_id and f"<@{self._bot_user_id}>" in text
         )
 
         # Mention gating: in channels, only respond to @mentions or app_mention events
@@ -225,4 +224,7 @@ class SlackChannel(Channel):
         try:
             await self.send_message(outbound)
         except Exception:
-            logger.exception("Failed to send Slack reply for session %s", msg.session_key)
+            logger.exception(
+                "Failed to send Slack reply for session %s",
+                msg.session_key,
+            )

@@ -14,10 +14,12 @@ Examples:
 import sys
 from pathlib import Path
 
-
 SKILL_TEMPLATE = """---
 name: {skill_name}
-description: [TODO: Complete and informative explanation of what the skill does and when to use it. Include WHEN to use this skill - specific scenarios, file types, or tasks that trigger it.]
+description: >-
+  [TODO: Complete and informative explanation of what the skill
+  does and when to use it. Include WHEN to use this skill -
+  specific scenarios, file types, or tasks that trigger it.]
 ---
 
 # {skill_title}
@@ -50,7 +52,9 @@ description: [TODO: Complete and informative explanation of what the skill does 
 - Example: Product Management with "Core Capabilities" → numbered capability list
 - Structure: ## Overview → ## Core Capabilities → ### 1. Feature → ### 2. Feature...
 
-Patterns can be mixed and matched as needed. Most skills combine patterns (e.g., start with task-based, add workflow for complex operations).
+Patterns can be mixed and matched as needed. Most skills
+combine patterns (e.g., start with task-based, add workflow
+for complex operations).
 
 Delete this entire "Structuring This Skill" section when done - it's just guidance.]
 
@@ -64,42 +68,58 @@ Delete this entire "Structuring This Skill" section when done - it's just guidan
 
 ## Resources
 
-This skill includes example resource directories that demonstrate how to organize different types of bundled resources:
+This skill includes example resource directories that
+demonstrate how to organize different types of bundled
+resources:
 
 ### scripts/
-Executable code (Python/Bash/etc.) that can be run directly to perform specific operations.
+Executable code (Python/Bash/etc.) that can be run directly
+to perform specific operations.
 
 **Examples from other skills:**
-- PDF skill: `fill_fillable_fields.py`, `extract_form_field_info.py` - utilities for PDF manipulation
+- PDF skill: `fill_fillable_fields.py`,
+  `extract_form_field_info.py` - utilities for PDF manipulation
 - DOCX skill: `document.py`, `utilities.py` - Python modules for document processing
 
-**Appropriate for:** Python scripts, shell scripts, or any executable code that performs automation, data processing, or specific operations.
+**Appropriate for:** Python scripts, shell scripts, or any
+executable code that performs automation, data processing,
+or specific operations.
 
-**Note:** Scripts may be executed without loading into context, but can still be read by Claude for patching or environment adjustments.
+**Note:** Scripts may be executed without loading into
+context, but can still be read by Claude for patching
+or environment adjustments.
 
 ### references/
-Documentation and reference material intended to be loaded into context to inform Claude's process and thinking.
+Documentation and reference material intended to be loaded
+into context to inform Claude's process and thinking.
 
 **Examples from other skills:**
-- Product management: `communication.md`, `context_building.md` - detailed workflow guides
+- Product management: `communication.md`,
+  `context_building.md` - detailed workflow guides
 - BigQuery: API reference documentation and query examples
 - Finance: Schema documentation, company policies
 
-**Appropriate for:** In-depth documentation, API references, database schemas, comprehensive guides, or any detailed information that Claude should reference while working.
+**Appropriate for:** In-depth documentation, API references,
+database schemas, comprehensive guides, or any detailed
+information that Claude should reference while working.
 
 ### assets/
-Files not intended to be loaded into context, but rather used within the output Claude produces.
+Files not intended to be loaded into context, but rather
+used within the output Claude produces.
 
 **Examples from other skills:**
 - Brand styling: PowerPoint template files (.pptx), logo files
 - Frontend builder: HTML/React boilerplate project directories
 - Typography: Font files (.ttf, .woff2)
 
-**Appropriate for:** Templates, boilerplate code, document templates, images, icons, fonts, or any files meant to be copied or used in the final output.
+**Appropriate for:** Templates, boilerplate code, document
+templates, images, icons, fonts, or any files meant to be
+copied or used in the final output.
 
 ---
 
-**Any unneeded directories can be deleted.** Not every skill requires all three types of resources.
+**Any unneeded directories can be deleted.** Not every skill
+requires all three types of resources.
 """
 
 EXAMPLE_SCRIPT = '''#!/usr/bin/env python3
@@ -129,7 +149,8 @@ This is a placeholder for detailed reference documentation.
 Replace with actual reference content or delete if not needed.
 
 Example real reference docs from other skills:
-- product-management/references/communication.md - Comprehensive guide for status updates
+- product-management/references/communication.md -
+  Comprehensive guide for status updates
 - product-management/references/context_building.md - Deep-dive on gathering context
 - bigquery/references/ - API references and query examples
 
@@ -162,7 +183,8 @@ Reference docs are ideal for:
 EXAMPLE_ASSET = """# Example Asset File
 
 This placeholder represents where asset files would be stored.
-Replace with actual asset files (templates, images, fonts, etc.) or delete if not needed.
+Replace with actual asset files (templates, images, fonts,
+etc.) or delete if not needed.
 
 Asset files are NOT intended to be loaded into context, but rather used within
 the output Claude produces.
@@ -188,7 +210,7 @@ Note: This is a text placeholder. Actual assets can be any file type.
 
 def title_case_skill_name(skill_name):
     """Convert hyphenated skill name to Title Case for display."""
-    return ' '.join(word.capitalize() for word in skill_name.split('-'))
+    return " ".join(word.capitalize() for word in skill_name.split("-"))
 
 
 def init_skill(skill_name, path):
@@ -221,11 +243,10 @@ def init_skill(skill_name, path):
     # Create SKILL.md from template
     skill_title = title_case_skill_name(skill_name)
     skill_content = SKILL_TEMPLATE.format(
-        skill_name=skill_name,
-        skill_title=skill_title
+        skill_name=skill_name, skill_title=skill_title
     )
 
-    skill_md_path = skill_dir / 'SKILL.md'
+    skill_md_path = skill_dir / "SKILL.md"
     try:
         skill_md_path.write_text(skill_content)
         print("✅ Created SKILL.md")
@@ -236,24 +257,24 @@ def init_skill(skill_name, path):
     # Create resource directories with example files
     try:
         # Create scripts/ directory with example script
-        scripts_dir = skill_dir / 'scripts'
+        scripts_dir = skill_dir / "scripts"
         scripts_dir.mkdir(exist_ok=True)
-        example_script = scripts_dir / 'example.py'
+        example_script = scripts_dir / "example.py"
         example_script.write_text(EXAMPLE_SCRIPT.format(skill_name=skill_name))
         example_script.chmod(0o755)
         print("✅ Created scripts/example.py")
 
         # Create references/ directory with example reference doc
-        references_dir = skill_dir / 'references'
+        references_dir = skill_dir / "references"
         references_dir.mkdir(exist_ok=True)
-        example_reference = references_dir / 'api_reference.md'
+        example_reference = references_dir / "api_reference.md"
         example_reference.write_text(EXAMPLE_REFERENCE.format(skill_title=skill_title))
         print("✅ Created references/api_reference.md")
 
         # Create assets/ directory with example asset placeholder
-        assets_dir = skill_dir / 'assets'
+        assets_dir = skill_dir / "assets"
         assets_dir.mkdir(exist_ok=True)
-        example_asset = assets_dir / 'example_asset.txt'
+        example_asset = assets_dir / "example_asset.txt"
         example_asset.write_text(EXAMPLE_ASSET)
         print("✅ Created assets/example_asset.txt")
     except Exception as e:
@@ -264,14 +285,16 @@ def init_skill(skill_name, path):
     print(f"\n✅ Skill '{skill_name}' initialized successfully at {skill_dir}")
     print("\nNext steps:")
     print("1. Edit SKILL.md to complete the TODO items and update the description")
-    print("2. Customize or delete the example files in scripts/, references/, and assets/")
+    print(
+        "2. Customize or delete the example files in scripts/, references/, and assets/"
+    )
     print("3. Run the validator when ready to check the skill structure")
 
     return skill_dir
 
 
 def main():
-    if len(sys.argv) < 4 or sys.argv[2] != '--path':
+    if len(sys.argv) < 4 or sys.argv[2] != "--path":
         print("Usage: init_skill.py <skill-name> --path <path>")
         print("\nSkill name requirements:")
         print("  - Kebab-case identifier (e.g., 'my-data-analyzer')")

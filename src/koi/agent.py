@@ -9,33 +9,39 @@ import signal
 import sys
 import time
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
-from rich.console import Console
-from rich.text import Text
-from rich.markdown import Markdown
+from typing import Any
+
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.styles import Style as PtStyle
+from rich.console import Console
+from rich.markdown import Markdown
 
+from .compaction import ContextCompactor
 from .config import Config
+from .context_guard import enforce_context_budget
+from .context_pruning import prune_context
 from .errors import (
-    KoiAPIError, KoiRateLimitError, KoiAuthError, KoiBillingError,
-    KoiServerError, KoiOverloadedError, KoiContextOverflowError, KoiConnectionError,
+    KoiAPIError,
+    KoiAuthError,
+    KoiBillingError,
+    KoiConnectionError,
+    KoiContextOverflowError,
+    KoiOverloadedError,
+    KoiRateLimitError,
+    KoiServerError,
 )
 from .llm import LLMClient
 from .memory import Memory
-from .skills import SkillsManager
+from .prompts import build_system_prompt, build_tool_result_message
 from .sandbox import Sandbox
+from .session_manager import SessionManager
+from .skills import SkillsManager
 from .subagent import SubagentManager
 from .tools import ToolExecutor, get_tool_definitions
-from .prompts import build_system_prompt, build_tool_result_message
-from .compaction import ContextCompactor
-from .context_pruning import prune_context
-from .context_guard import enforce_context_budget
-from .session_manager import SessionManager
 from .transcript import TranscriptLogger
-from .usage import log_usage, estimate_cost
+from .usage import estimate_cost, log_usage
 
 console = Console()
 
@@ -49,7 +55,7 @@ def _fmt_num(n: int) -> str:
     return str(n)
 
 
-def strip_thinking_tags(text: str) -> Tuple[str, str]:
+def strip_thinking_tags(text: str) -> tuple[str, str]:
     """Strip <think>...</think> blocks and extract <final>...</final> content.
 
     Returns (visible_text, thinking_text) where:
@@ -85,7 +91,7 @@ def strip_thinking_tags(text: str) -> Tuple[str, str]:
 
 class Agent:
     """Main agent class that handles conversation and tool execution."""
-    
+
     def __init__(self, config: Config, non_interactive: bool = False):
         """Initialize agent with configuration."""
         self.config = config
@@ -100,9 +106,9 @@ class Agent:
         )
         self.compactor = ContextCompactor(self.llm_client, config.context_window)
 
-        self.messages: List[Dict[str, Any]] = []
+        self.messages: list[dict[str, Any]] = []
         self.running = False
-        self._current_task: Optional[asyncio.Task] = None
+        self._current_task: asyncio.Task | None = None
         self._prompt_session = None
 
         if not non_interactive:
@@ -111,23 +117,29 @@ class Agent:
             # Enter submits, Alt+Enter inserts a newline
             bindings = KeyBindings()
 
-            @bindings.add('enter')
+            @bindings.add("enter")
             def _(event):
                 event.current_buffer.validate_and_handle()
 
-            @bindings.add('escape', 'enter')
+            @bindings.add("escape", "enter")
             def _(event):
                 event.current_buffer.newline()
 
-            self._prompt_style = PtStyle.from_dict({
-                'prompt': '#6cb6ff bold',     # soft blue prompt
-                '': '#e0e0e0',                # light gray user text
-            })
-            self._prompt_session = PromptSession(key_bindings=bindings, multiline=True, style=self._prompt_style)
+            self._prompt_style = PtStyle.from_dict(
+                {
+                    "prompt": "#6cb6ff bold",  # soft blue prompt
+                    "": "#e0e0e0",  # light gray user text
+                }
+            )
+            self._prompt_session = PromptSession(
+                key_bindings=bindings,
+                multiline=True,
+                style=self._prompt_style,
+            )
 
-        self._pending_subagent_results: List[Dict[str, Any]] = []
-        self._interrupted = False  # Flag-based interrupt (no raise from signal handler)
-        self._last_interrupt_time: Optional[float] = None
+        self._pending_subagent_results: list[dict[str, Any]] = []
+        self._interrupted = False
+        self._last_interrupt_time: float | None = None
 
         # System prompt stored separately — never in the messages array.
         # Injected into the API payload at call time by LLMClient.
@@ -139,20 +151,23 @@ class Agent:
 
         # Debug transcript logger
         import hashlib
+
         koi_dir = Path.cwd() / ".koi"
         self.transcript = TranscriptLogger(koi_dir, enabled=config.debug)
-        self.transcript.log_session_start({
-            "model": config.model,
-            "api_format": config.api_format,
-            "system_prompt_hash": hashlib.sha256(
-                self.system_prompt.encode()
-            ).hexdigest()[:16],
-        })
+        self.transcript.log_session_start(
+            {
+                "model": config.model,
+                "api_format": config.api_format,
+                "system_prompt_hash": hashlib.sha256(
+                    self.system_prompt.encode()
+                ).hexdigest()[:16],
+            }
+        )
 
         # Session persistence (always on)
         self.session_manager = SessionManager(koi_dir)
         self._ephemeral = False  # Set True for --no-session mode
-    
+
     async def run_interactive(self):
         """Run interactive agent session."""
         self.running = True
@@ -178,14 +193,22 @@ class Agent:
                 model=self.config.model,
                 cwd=str(Path.cwd()),
             )
-        console.print("  Type [dim]/help[/dim] for commands, [dim]/exit[/dim] to quit, [dim]Alt+Enter[/dim] for newline")
+        console.print(
+            "  Type [dim]/help[/dim] for commands,"
+            " [dim]/exit[/dim] to quit,"
+            " [dim]Alt+Enter[/dim] for newline"
+        )
         console.print()
 
         try:
             while self.running:
                 # Get user input
                 try:
-                    user_input = (await self._prompt_session.prompt_async(HTML('<prompt>koi&gt; </prompt>'))).strip()
+                    user_input = (
+                        await self._prompt_session.prompt_async(
+                            HTML("<prompt>koi&gt; </prompt>")
+                        )
+                    ).strip()
                 except KeyboardInterrupt:
                     console.print("\n👋 Goodbye!", style="yellow")
                     break
@@ -196,11 +219,24 @@ class Agent:
                 if not user_input:
                     continue
 
-                # Handle special commands (but not file paths like /home/...)
-                _COMMANDS = {'exit', 'quit', 'help', 'memory', 'remember', 'compact', 'skills', 'status', 'stats', 'usage', 'new', 'fork'}
-                if user_input.startswith('/'):
-                    cmd_word = user_input.split()[0][1:].lower()  # e.g. '/exit' -> 'exit'
-                    if cmd_word in _COMMANDS:
+                # Handle special commands (not file paths)
+                _commands = {
+                    "exit",
+                    "quit",
+                    "help",
+                    "memory",
+                    "remember",
+                    "compact",
+                    "skills",
+                    "status",
+                    "stats",
+                    "usage",
+                    "new",
+                    "fork",
+                }
+                if user_input.startswith("/"):
+                    cmd_word = user_input.split()[0][1:].lower()
+                    if cmd_word in _commands:
                         await self._handle_command(user_input)
                         continue
 
@@ -236,7 +272,9 @@ class Agent:
             signal.signal(signal.SIGINT, prev_handler)
             if self.llm_client.usage.total_requests > 0:
                 console.print()
-                console.print(self.llm_client.usage.summary(self.config.model), style="dim")
+                console.print(
+                    self.llm_client.usage.summary(self.config.model), style="dim"
+                )
                 log_usage(self.llm_client.usage, self.config.model, Path(".koi"))
             if not self._ephemeral:
                 self.session_manager.close()
@@ -246,10 +284,11 @@ class Agent:
         """Run a specific task (for cron jobs)."""
         if non_interactive:
             from datetime import datetime
+
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            print(f"\n{'='*60}")
+            print(f"\n{'=' * 60}")
             print(f"[{timestamp}] Cron task started: {task}")
-            print(f"{'='*60}")
+            print(f"{'=' * 60}")
         else:
             console.print(f"🐠 [bold cyan]Koi Agent[/bold cyan] - Running task: {task}")
 
@@ -293,7 +332,7 @@ class Agent:
             await self.llm_client.close()
 
     async def run_pipe_mode(self):
-        """Run in pipe mode: read JSON messages from stdin, write JSON responses to stdout.
+        """Run in pipe mode: read JSON from stdin, write JSON to stdout.
 
         Used by persistent subagent sessions. The parent process communicates
         via newline-delimited JSON on stdin/stdout.
@@ -304,10 +343,10 @@ class Agent:
         """
         import sys
 
-        tools = get_tool_definitions()
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
-        await asyncio.get_event_loop().connect_read_pipe(lambda: protocol, sys.stdin)
+        loop = asyncio.get_event_loop()
+        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
 
         while True:
             line = await reader.readline()
@@ -328,7 +367,12 @@ class Agent:
                 break
 
             if msg.get("type") != "message":
-                self._pipe_write({"type": "error", "error": f"Unknown message type: {msg.get('type')}"})
+                self._pipe_write(
+                    {
+                        "type": "error",
+                        "error": f"Unknown type: {msg.get('type')}",
+                    }
+                )
                 continue
 
             user_content = msg.get("content", "")
@@ -352,11 +396,13 @@ class Agent:
                     response_text = m["content"]
                     break
 
-            self._pipe_write({
-                "type": "response",
-                "content": response_text,
-                "usage": self.llm_client.usage.to_dict(),
-            })
+            self._pipe_write(
+                {
+                    "type": "response",
+                    "content": response_text,
+                    "usage": self.llm_client.usage.to_dict(),
+                }
+            )
 
         # Cleanup
         if self.llm_client.usage.total_requests > 0:
@@ -366,6 +412,7 @@ class Agent:
     def _pipe_write(self, data: dict):
         """Write a JSON line to stdout for pipe mode communication."""
         import sys
+
         sys.stdout.write(json.dumps(data) + "\n")
         sys.stdout.flush()
 
@@ -391,19 +438,21 @@ class Agent:
                 self._pending_subagent_results.clear()
 
             # Preemptive context pruning: trim/clear old tool results
-            self.messages = prune_context(
-                self.messages, self.config.context_window
-            )
+            self.messages = prune_context(self.messages, self.config.context_window)
 
             # Check if compaction is needed
             if self.compactor.needs_compaction(self.messages):
                 if not non_interactive:
-                    console.print("🔄 Compacting conversation history...", style="yellow")
+                    console.print(
+                        "🔄 Compacting conversation history...", style="yellow"
+                    )
 
                 try:
                     self.messages = await self.compactor.compact_messages(self.messages)
                     if not self._ephemeral:
-                        self.session_manager.save_compaction("Auto-compaction", tokens_before=0)
+                        self.session_manager.save_compaction(
+                            "Auto-compaction", tokens_before=0
+                        )
                 except asyncio.CancelledError:
                     # Compaction cancelled — keep original messages, re-raise
                     raise
@@ -418,18 +467,20 @@ class Agent:
                 if non_interactive:
                     # Non-interactive mode for cron jobs
                     response = await self.llm_client.chat(
-                        self.messages, tools=tools, system_prompt=self.system_prompt
+                        self.messages,
+                        tools=tools,
+                        system_prompt=self.system_prompt,
                     )
                 else:
                     # Interactive mode with streaming display
                     response = await self._stream_response(self.messages, tools)
-                
+
                 if not response.get("choices"):
-                    console.print("❌ No response from LLM", style="red")
+                    console.print("No response from LLM", style="red")
                     break
-                
+
                 message = response["choices"][0]["message"]
-                
+
                 # Check if model wants to use tools
                 if message.get("tool_calls"):
                     # Add assistant message with tool calls
@@ -444,59 +495,108 @@ class Agent:
                             # Show tool call with styled name
                             try:
                                 args = json.loads(tool_call["function"]["arguments"])
-                                args_summary = ", ".join(f"{k}={repr(v)[:60]}" for k, v in args.items())
-                                console.print(f"  ● [cyan]{func_name}[/cyan]([dim]{args_summary}[/dim])")
+                                args_summary = ", ".join(
+                                    f"{k}={repr(v)[:60]}" for k, v in args.items()
+                                )
+                                console.print(
+                                    f"  [cyan]{func_name}[/cyan]"
+                                    f"([dim]{args_summary}[/dim])"
+                                )
                             except Exception:
-                                console.print(f"  ● [cyan]{func_name}[/cyan]")
-                        
+                                console.print(f"  [cyan]{func_name}[/cyan]")
+
                         # Execute tool
                         if non_interactive:
                             result = await self.tool_executor.execute_tool(tool_call)
                         else:
-                            with console.status(f"  Running {func_name}...", spinner="dots"):
-                                result = await self.tool_executor.execute_tool(tool_call)
-                        
-                        # Show errors and key results to the user
+                            with console.status(
+                                f"  Running {func_name}...",
+                                spinner="dots",
+                            ):
+                                result = await self.tool_executor.execute_tool(
+                                    tool_call
+                                )
+
+                        # Show errors and key results
                         if not non_interactive:
                             if not result.get("success", True):
                                 error_msg = result.get("error", "")
                                 if not error_msg:
-                                    error_msg = (result.get("stderr") or result.get("stdout") or "").strip()
+                                    error_msg = (
+                                        result.get("stderr")
+                                        or result.get("stdout")
+                                        or ""
+                                    ).strip()
                                     if not error_msg:
-                                        error_msg = f"{func_name} failed without providing details"
+                                        error_msg = (
+                                            f"{func_name} failed without details"
+                                        )
                                 if len(error_msg) > 300:
                                     error_msg = error_msg[:300] + "..."
-                                console.print(f"    [red]✗[/red] {error_msg}", style="red")
+                                console.print(
+                                    f"    [red]x[/red] {error_msg}",
+                                    style="red",
+                                )
                             elif result.get("exit_code", 0) != 0:
-                                console.print(f"    [yellow]⚠[/yellow] Exit code {result['exit_code']}", style="yellow")
+                                console.print(
+                                    f"    [yellow]![/yellow]"
+                                    f" Exit code {result['exit_code']}",
+                                    style="yellow",
+                                )
                                 if result.get("stderr"):
-                                    console.print(f"    {result['stderr'][:200]}", style="dim red")
+                                    console.print(
+                                        f"    {result['stderr'][:200]}",
+                                        style="dim red",
+                                    )
                             else:
                                 if func_name == "edit_file" and result.get("message"):
                                     msg_lines = result["message"].splitlines()
                                     if len(msg_lines) > 1:
-                                        console.print(f"    [green]✓[/green] {msg_lines[0]}")
-                                        for line in msg_lines[1:]:
-                                            if line.startswith("-"):
-                                                console.print(f"      {line}", style="red")
-                                            elif line.startswith("+"):
-                                                console.print(f"      {line}", style="green")
+                                        console.print(
+                                            f"    [green]v[/green] {msg_lines[0]}"
+                                        )
+                                        for ln in msg_lines[1:]:
+                                            if ln.startswith("-"):
+                                                console.print(
+                                                    f"      {ln}",
+                                                    style="red",
+                                                )
+                                            elif ln.startswith("+"):
+                                                console.print(
+                                                    f"      {ln}",
+                                                    style="green",
+                                                )
                                             else:
-                                                console.print(f"      {line}", style="dim")
+                                                console.print(
+                                                    f"      {ln}",
+                                                    style="dim",
+                                                )
                                     else:
-                                        console.print(f"    [green]✓[/green] {result['message']}")
-                                elif func_name in ["write_file", "create_alert", "update_memory"] and result.get("message"):
-                                    console.print(f"    [green]✓[/green] {result['message']}")
-                        
+                                        console.print(
+                                            f"    [green]v[/green] {result['message']}"
+                                        )
+                                elif func_name in [
+                                    "write_file",
+                                    "create_alert",
+                                    "update_memory",
+                                ] and result.get("message"):
+                                    console.print(
+                                        f"    [green]v[/green] {result['message']}"
+                                    )
+
                         # Add tool result message
-                        tool_result_msg = build_tool_result_message(tool_call, result, self.config.context_window)
+                        tool_result_msg = build_tool_result_message(
+                            tool_call,
+                            result,
+                            self.config.context_window,
+                        )
                         self.messages.append(tool_result_msg)
                         if not self._ephemeral:
                             self.session_manager.save_message(tool_result_msg)
 
-                    # Continue the loop to let model process tool results
+                    # Continue the loop for tool results
                     continue
-                
+
                 else:
                     # Final text response
                     content = message.get("content")
@@ -511,51 +611,78 @@ class Agent:
                                 print(visible)
                         else:
                             print(content)
-                    # Interactive display was already handled by _stream_response
+                    # Interactive display handled by _stream_response
                     break
-            
+
             except asyncio.CancelledError:
                 raise
 
             except KoiAuthError as e:
-                console.print(f"🔑 Authentication failed. Check your API key.", style="red")
+                console.print(
+                    "Auth failed. Check your API key.",
+                    style="red",
+                )
                 if not non_interactive:
                     console.print(f"   {e}", style="dim red")
                 break
 
             except KoiBillingError as e:
-                console.print(f"💳 Billing issue. Check your account.", style="red")
+                console.print(
+                    "Billing issue. Check your account.",
+                    style="red",
+                )
                 if not non_interactive:
                     console.print(f"   {e}", style="dim red")
                 break
 
             except KoiContextOverflowError as e:
                 if not _overflow_retried:
-                    console.print("📏 Context too long, auto-compacting...", style="yellow")
+                    console.print(
+                        "Context too long, auto-compacting...",
+                        style="yellow",
+                    )
                     self.messages = await self.compactor.compact_messages(self.messages)
                     if not self._ephemeral:
-                        self.session_manager.save_compaction("Overflow auto-compaction", tokens_before=0)
+                        self.session_manager.save_compaction(
+                            "Overflow auto-compaction",
+                            tokens_before=0,
+                        )
                     _overflow_retried = True
                     continue
                 else:
-                    console.print(f"📏 Context too long. Try /compact or start a /new session.", style="yellow")
+                    console.print(
+                        "Context too long. Try /compact or /new.",
+                        style="yellow",
+                    )
                     if not non_interactive:
                         console.print(f"   {e}", style="dim yellow")
                     break
 
             except KoiRateLimitError as e:
                 if e.retry_after:
-                    console.print(f"⏳ Rate limited. Server wants {e.retry_after:.0f}s wait. Try again later.", style="yellow")
+                    console.print(
+                        f"Rate limited. Server wants {e.retry_after:.0f}s wait.",
+                        style="yellow",
+                    )
                 else:
-                    console.print(f"⏳ Rate limited after retries. Wait a moment and try again.", style="yellow")
+                    console.print(
+                        "Rate limited after retries. Wait a moment and try again.",
+                        style="yellow",
+                    )
                 break
 
             except (KoiServerError, KoiOverloadedError) as e:
-                console.print(f"🔥 Provider is having issues ({e}). Try again later.", style="yellow")
+                console.print(
+                    f"Provider issues ({e}). Try again later.",
+                    style="yellow",
+                )
                 break
 
-            except KoiConnectionError as e:
-                console.print(f"🌐 Connection failed after retries. Check your network.", style="red")
+            except KoiConnectionError:
+                console.print(
+                    "Connection failed after retries. Check your network.",
+                    style="red",
+                )
                 break
 
             except KoiAPIError as e:
@@ -568,8 +695,12 @@ class Agent:
                 if non_interactive:
                     print(error_msg)
                 break
-    
-    async def _stream_response(self, messages: List[Dict[str, Any]], tools: List[Dict[str, Any]]) -> Dict[str, Any]:
+
+    async def _stream_response(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+    ) -> dict[str, Any]:
         """Stream response from LLM and display tokens progressively."""
         spinner = None
         try:
@@ -600,7 +731,9 @@ class Agent:
 
                 elif event.type == "toolcall_start":
                     if spinner is None:
-                        spinner = console.status("  [dim]Preparing tool call...[/dim]", spinner="dots")
+                        spinner = console.status(
+                            "  [dim]Preparing tool call...[/dim]", spinner="dots"
+                        )
                         spinner.start()
                     else:
                         spinner.update("  [dim]Preparing tool call...[/dim]")
@@ -661,64 +794,76 @@ class Agent:
             if spinner:
                 spinner.stop()
             raise KoiAPIError(f"LLM request failed: {e}", retryable=False)
-    
+
     async def _handle_command(self, command: str):
         """Handle special commands."""
         cmd = command.lower()
-        
-        if cmd == '/exit' or cmd == '/quit':
+
+        if cmd == "/exit" or cmd == "/quit":
             self.running = False
-            console.print("👋 Goodbye!", style="yellow")
-        
-        elif cmd == '/help':
+            console.print("Goodbye!", style="yellow")
+
+        elif cmd == "/help":
             self._show_help()
-        
-        elif cmd == '/memory':
+
+        elif cmd == "/memory":
             memory_content = self.memory.load()
             if memory_content.strip():
                 console.print("[bold blue]Current Memory:[/bold blue]")
                 console.print(Markdown(memory_content))
             else:
                 console.print("Memory is empty.", style="yellow")
-        
-        elif cmd.startswith('/remember '):
+
+        elif cmd.startswith("/remember "):
             text = command[10:]  # Remove '/remember '
             self.memory.append(text)
-            console.print("✅ Added to memory", style="green")
-        
-        elif cmd == '/compact':
+            console.print("Added to memory", style="green")
+
+        elif cmd == "/compact":
             if len(self.messages) > 2:
-                console.print("🔄 Compacting conversation...", style="yellow")
+                console.print(
+                    "Compacting conversation...",
+                    style="yellow",
+                )
                 self.messages = await self.compactor.compact_messages(self.messages)
                 if not self._ephemeral:
-                    self.session_manager.save_compaction("Manual compaction", tokens_before=0)
-                console.print("✅ Conversation compacted", style="green")
+                    self.session_manager.save_compaction(
+                        "Manual compaction",
+                        tokens_before=0,
+                    )
+                console.print("Conversation compacted", style="green")
             else:
-                console.print("Not enough messages to compact.", style="yellow")
-        
-        elif cmd == '/skills':
+                console.print(
+                    "Not enough messages to compact.",
+                    style="yellow",
+                )
+
+        elif cmd == "/skills":
             skills = self.skills_manager.list_skills()
             if skills:
                 console.print("[bold blue]Available Skills:[/bold blue]")
                 for skill in skills:
-                    console.print(f"- [cyan]{skill['name']}[/cyan]: {skill['description']}")
+                    console.print(
+                        f"- [cyan]{skill['name']}[/cyan]: {skill['description']}"
+                    )
             else:
                 console.print("No skills found.", style="yellow")
-        
-        elif cmd == '/status' or cmd == '/stats':
+
+        elif cmd == "/status" or cmd == "/stats":
             self._show_status()
 
-        elif cmd == '/usage':
+        elif cmd == "/usage":
             # Current session usage
             console.print(self.llm_client.usage.summary(self.config.model))
             console.print()  # Empty line
-            
+
             # 7-day history from usage log
             from .usage import get_usage_history
-            history = get_usage_history(Path('.koi'), days=7)
+
+            history = get_usage_history(Path(".koi"), days=7)
             console.print(history)
 
-        elif cmd == '/new':
+        elif cmd == "/new":
             self.messages.clear()
             self.compactor.compaction_count = 0
             if not self._ephemeral:
@@ -727,25 +872,37 @@ class Agent:
                     model=self.config.model,
                     cwd=str(Path.cwd()),
                 )
-            console.print("🆕 New session started. Context cleared.", style="green")
+            console.print(
+                "New session started. Context cleared.",
+                style="green",
+            )
 
-        elif cmd == '/fork':
+        elif cmd == "/fork":
             if self._ephemeral:
-                console.print("Cannot fork in ephemeral mode.", style="yellow")
+                console.print(
+                    "Cannot fork in ephemeral mode.",
+                    style="yellow",
+                )
             else:
                 self.session_manager.fork()
-                console.print("🔀 Forked session. New messages will branch from here.", style="green")
+                console.print(
+                    "Forked session. New messages will branch from here.",
+                    style="green",
+                )
 
         else:
-            console.print(f"Unknown command: {command}", style="red")
-    
+            console.print(
+                f"Unknown command: {command}",
+                style="red",
+            )
+
     def _print_session_header(self):
         """Print a bordered session header card."""
         model = self.config.model
         cwd = os.getcwd()
         home = os.path.expanduser("~")
         if cwd.startswith(home):
-            cwd = "~" + cwd[len(home):]
+            cwd = "~" + cwd[len(home) :]
         skills_count = len(self.skills_manager.list_skills())
 
         lines = [
@@ -759,6 +916,7 @@ class Agent:
         ]
 
         from rich.text import Text as RichText
+
         max_width = 0
         for label, value in lines:
             t = RichText.from_markup(label + value)
@@ -771,34 +929,35 @@ class Agent:
         for label, value in lines:
             t = RichText.from_markup(label + value)
             padding = max_width - len(t)
-            console.print(f"  [dim]│[/dim] {label}{value}{' ' * padding} [dim]│[/dim]")
+            console.print(f"  [dim]|[/dim] {label}{value}{' ' * padding} [dim]|[/dim]")
         console.print(f"  [dim]╰{'─' * (box_width - 2)}╯[/dim]")
-
 
     def _show_help(self):
         """Show help information."""
-        help_text = """[bold blue]Koi Agent Commands:[/bold blue]
-
-[cyan]Chat Commands:[/cyan]
-- /exit, /quit     - Exit the agent
-- /help           - Show this help
-- /memory         - Show current memory
-- /remember TEXT  - Add text to memory
-- /skills         - List available skills
-- /compact        - Force conversation compaction
-- /status         - Show status card (model, tokens, cache, context)
-- /stats          - Alias for /status
-- /usage          - Show detailed token usage and estimated cost
-- /new             - Start a new session (clear context)
-- /fork            - Fork session (branch from current point)
-
-[cyan]Usage:[/cyan]
-Just type your requests normally and I'll help you with tasks using available tools.
-"""
+        help_text = (
+            "[bold blue]Koi Agent Commands:[/bold blue]\n"
+            "\n"
+            "[cyan]Chat Commands:[/cyan]\n"
+            "- /exit, /quit  - Exit the agent\n"
+            "- /help         - Show this help\n"
+            "- /memory       - Show current memory\n"
+            "- /remember TXT - Add text to memory\n"
+            "- /skills       - List available skills\n"
+            "- /compact      - Force compaction\n"
+            "- /status       - Show status card\n"
+            "- /stats        - Alias for /status\n"
+            "- /usage        - Token usage + cost\n"
+            "- /new          - New session\n"
+            "- /fork         - Fork session\n"
+            "\n"
+            "[cyan]Usage:[/cyan]\n"
+            "Type your requests and I'll help"
+            " using available tools.\n"
+        )
         console.print(help_text)
-    
+
     def _show_status(self):
-        """Show rich status card with model, tokens, cache, context, and runtime info."""
+        """Show status card with model, tokens, cache, etc."""
         # Version
         console.print("\U0001f420 [bold cyan]Koi[/bold cyan] v0.1.0")
 
@@ -808,9 +967,9 @@ Just type your requests normally and I'll help you with tasks using available to
             masked = key[:6] + "..." + key[-4:]
         else:
             masked = "***"
-        console.print(
-            f"\U0001f9e0 Model: {self.config.model} \u00b7 \U0001f511 {masked} ({self.config.api_format})"
-        )
+        model = self.config.model
+        fmt = self.config.api_format
+        console.print(f"\U0001f9e0 Model: {model} \u00b7 \U0001f511 {masked} ({fmt})")
 
         # Tokens + cost
         u = self.llm_client.usage
@@ -822,9 +981,9 @@ Just type your requests normally and I'll help you with tasks using available to
             u.cache_creation_tokens,
         )
         cost_str = f" \u00b7 \U0001f4b0 ${cost:.4f}" if cost > 0 else ""
-        console.print(
-            f"\U0001f9ee Tokens: {_fmt_num(u.input_tokens)} in / {_fmt_num(u.output_tokens)} out{cost_str}"
-        )
+        inp = _fmt_num(u.input_tokens)
+        out = _fmt_num(u.output_tokens)
+        console.print(f"\U0001f9ee Tokens: {inp} in / {out} out{cost_str}")
 
         # Cache (only show if any cache activity)
         total_input = u.input_tokens + u.cache_read_tokens + u.cache_creation_tokens
@@ -832,8 +991,12 @@ Just type your requests normally and I'll help you with tasks using available to
             hit_pct = (
                 int(u.cache_read_tokens / total_input * 100) if total_input > 0 else 0
             )
+            cached = _fmt_num(u.cache_read_tokens)
+            created = _fmt_num(u.cache_creation_tokens)
             console.print(
-                f"\U0001f5c4\ufe0f  Cache: {hit_pct}% hit \u00b7 {_fmt_num(u.cache_read_tokens)} cached, {_fmt_num(u.cache_creation_tokens)} new"
+                f"\U0001f5c4\ufe0f  Cache: {hit_pct}% hit"
+                f" \u00b7 {cached} cached,"
+                f" {created} new"
             )
 
         # Context
@@ -842,15 +1005,22 @@ Just type your requests normally and I'll help you with tasks using available to
         ctx_max = self.config.context_window
         ctx_pct = stats["usage_percent"]
         compactions = self.compactor.compaction_count
+        ctx_t = _fmt_num(ctx_tokens)
+        ctx_m = _fmt_num(ctx_max)
         console.print(
-            f"\U0001f4da Context: {_fmt_num(ctx_tokens)}/{_fmt_num(ctx_max)} ({ctx_pct}%) \u00b7 \U0001f9f9 Compactions: {compactions}"
+            f"\U0001f4da Context: {ctx_t}/{ctx_m}"
+            f" ({ctx_pct}%)"
+            f" \u00b7 \U0001f9f9 Compactions: {compactions}"
         )
 
         # Runtime
         think = self.config.thinking_level
         cache_status = "on" if self.config.prompt_caching else "off"
+        api_fmt = self.config.api_format
         console.print(
-            f"\u2699\ufe0f  Runtime: {self.config.api_format} \u00b7 Think: {think} \u00b7 Prompt cache: {cache_status}"
+            f"\u2699\ufe0f  Runtime: {api_fmt}"
+            f" \u00b7 Think: {think}"
+            f" \u00b7 Prompt cache: {cache_status}"
         )
 
         # Sub-agents
@@ -919,21 +1089,24 @@ Just type your requests normally and I'll help you with tasks using available to
         msg = {
             "role": "system",
             "content": (
-                f"[Sub-agent '{label}' (id={run.id}) completed]\n"
+                f"[Sub-agent '{label}'"
+                f" (id={run.id}) completed]\n"
                 f"Exit code: {run.exit_code}\n"
                 f"Result: {summary[:1000]}"
             ),
         }
         self._pending_subagent_results.append(msg)
-        # Notify user immediately (visible even while at prompt)
-        status = "[green]✓[/green]" if run.exit_code == 0 else "[red]✗[/red]"
-        console.print(f"\n  {status} Sub-agent [cyan]{label}[/cyan] (id={run.id}) completed")
+        # Notify user immediately
+        status = "[green]v[/green]" if run.exit_code == 0 else "[red]x[/red]"
+        console.print(
+            f"\n  {status} Sub-agent [cyan]{label}[/cyan] (id={run.id}) completed"
+        )
         if summary:
-            for line in summary[:500].splitlines():
-                line = line.strip()
-                if line:
-                    console.print(f"    {line}", style="dim")
-        
+            for ln in summary[:500].splitlines():
+                ln = ln.strip()
+                if ln:
+                    console.print(f"    {ln}", style="dim")
+
         # Reprint prompt so user knows they can type
         console.file.write("koi> ")
         console.file.flush()
@@ -950,4 +1123,7 @@ Just type your requests normally and I'll help you with tasks using available to
         # Show what was loaded
         msg_count = len(self.messages)
         model = data["header"].get("model", "unknown") if data["header"] else "unknown"
-        console.print(f"📂 Resumed session: {msg_count} messages (model: {model})", style="dim cyan")
+        console.print(
+            f"📂 Resumed session: {msg_count} messages (model: {model})",
+            style="dim cyan",
+        )

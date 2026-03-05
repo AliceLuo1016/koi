@@ -10,9 +10,9 @@ Set the API key directly in --key or edit DEFAULT_KEYS below.
 """
 
 import argparse
-import json
 import sys
-from typing import Dict, Any
+from typing import Any
+
 import httpx
 
 # Optional: fill these in locally if you don't want to pass --key each time.
@@ -44,7 +44,7 @@ MODEL_PRESETS = {
 }
 
 
-def build_request(preset: Dict[str, Any], key: str) -> Dict[str, Any]:
+def build_request(preset: dict[str, Any], key: str) -> dict[str, Any]:
     """Return (url, headers, payload)."""
     api_format = preset["api_format"]
     model = preset["model"]
@@ -59,18 +59,23 @@ def build_request(preset: Dict[str, Any], key: str) -> Dict[str, Any]:
         payload = {
             "model": model,
             "input": [
-                {"role": "user", "content": "Search the web for today's top tech headline and cite sources."}
+                {
+                    "role": "user",
+                    "content": (
+                        "Search the web for today's top tech headline and cite sources."
+                    ),
+                }
             ],
-            "tools": [
-                {"type": "web_search"}
-            ],
+            "tools": [{"type": "web_search"}],
             "max_output_tokens": 200,
         }
         return url, headers, payload
 
     if api_format == "chat_completions":
-        # Chat Completions models generally do NOT support built-in web search unless using search models.
-        # We still send a normal request and mark web search as NOT supported if the model lacks it.
+        # Chat Completions models generally do NOT support
+        # built-in web search unless using search models.
+        # We still send a normal request and mark web search
+        # as NOT supported if the model lacks it.
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {key}",
@@ -78,7 +83,14 @@ def build_request(preset: Dict[str, Any], key: str) -> Dict[str, Any]:
         payload = {
             "model": model,
             "messages": [
-                {"role": "user", "content": "Try to search the web for today's top tech headline and cite sources."}
+                {
+                    "role": "user",
+                    "content": (
+                        "Try to search the web for"
+                        " today's top tech headline"
+                        " and cite sources."
+                    ),
+                }
             ],
             "max_tokens": 200,
         }
@@ -95,7 +107,12 @@ def build_request(preset: Dict[str, Any], key: str) -> Dict[str, Any]:
             "model": model,
             "max_tokens": 2048,
             "messages": [
-                {"role": "user", "content": "Search the web for today's top tech headline and cite sources."}
+                {
+                    "role": "user",
+                    "content": (
+                        "Search the web for today's top tech headline and cite sources."
+                    ),
+                }
             ],
             "tools": [
                 {
@@ -114,7 +131,9 @@ def build_request(preset: Dict[str, Any], key: str) -> Dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--preset", required=True, choices=["1", "2", "3"], help="Preset number")
+    parser.add_argument(
+        "--preset", required=True, choices=["1", "2", "3"], help="Preset number"
+    )
     parser.add_argument("--key", default="", help="API key for this preset")
     parser.add_argument(
         "--tool-type",
@@ -158,7 +177,8 @@ def main() -> int:
             # Responses API: tool calls appear in output items
             output = data.get("output", [])
             tool_items = [
-                item for item in output
+                item
+                for item in output
                 if item.get("type") in ("web_search_call", "tool_call", "function_call")
             ]
             used_tool = bool(tool_items)
@@ -166,8 +186,16 @@ def main() -> int:
             if tool_items:
                 print("--- Tool call details ---")
                 for item in tool_items:
-                    name = item.get("name") or item.get("tool") or item.get("function", {}).get("name")
-                    args = item.get("arguments") or item.get("parameters") or item.get("function", {}).get("arguments")
+                    name = (
+                        item.get("name")
+                        or item.get("tool")
+                        or item.get("function", {}).get("name")
+                    )
+                    args = (
+                        item.get("arguments")
+                        or item.get("parameters")
+                        or item.get("function", {}).get("arguments")
+                    )
                     if isinstance(args, str) and len(args) > 500:
                         args = args[:500] + "..."
                     print(f"type={item.get('type')} name={name}")
@@ -178,13 +206,16 @@ def main() -> int:
                 print("--- Output item types ---")
                 print(", ".join(item.get("type", "?") for item in output))
             has_result = any(
-                item.get("type") in ("web_search_result", "tool_result", "function_call_output")
+                item.get("type")
+                in ("web_search_result", "tool_result", "function_call_output")
                 for item in output
             )
             if has_result:
                 conclusion = "PASS: web search executed (results present)."
             elif used_tool:
-                conclusion = "FAIL: model requested web search, but no results were returned."
+                conclusion = (
+                    "FAIL: model requested web search, but no results were returned."
+                )
             else:
                 conclusion = "FAIL: no web search tool call detected."
         elif preset["api_format"] == "anthropic":
@@ -200,20 +231,31 @@ def main() -> int:
                         tool_input = block.get("input")
                         print(f"name={name} input={tool_input}")
             has_result = any(
-                block.get("type") == "web_search_tool_result" or
-                (block.get("type") == "server_tool_use" and block.get("name") == "web_search")
+                block.get("type") == "web_search_tool_result"
+                or (
+                    block.get("type") == "server_tool_use"
+                    and block.get("name") == "web_search"
+                )
                 for block in content
             )
             if has_result:
                 conclusion = "PASS: web search executed (results/citations present)."
             elif used_tool:
-                conclusion = "FAIL: model requested web search, but no results were returned."
+                conclusion = (
+                    "FAIL: model requested web search, but no results were returned."
+                )
             else:
                 conclusion = "FAIL: no web search tool call detected."
         else:
             # Chat Completions: no web search unless using special models
-            print("Note: Chat Completions endpoint does not support built-in web search unless using search-enabled models.")
-            conclusion = "FAIL: built-in web search not supported on this endpoint/model."
+            print(
+                "Note: Chat Completions endpoint does not"
+                " support built-in web search unless"
+                " using search-enabled models."
+            )
+            conclusion = (
+                "FAIL: built-in web search not supported on this endpoint/model."
+            )
 
         # Print a short snippet
         text = None

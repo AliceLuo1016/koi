@@ -7,7 +7,7 @@ Phase 1 (soft trim): Keep head + tail of large old tool results.
 Phase 2 (hard clear): Replace entire old tool results with placeholder.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 # --- Constants ---
 
@@ -42,7 +42,7 @@ PRUNABLE_TOOLS = {
 }
 
 
-def estimate_message_chars(msg: Dict[str, Any]) -> int:
+def estimate_message_chars(msg: dict[str, Any]) -> int:
     """Estimate the character count of a single message."""
     role = msg.get("role", "")
 
@@ -72,12 +72,12 @@ def estimate_message_chars(msg: Dict[str, Any]) -> int:
     return len(content) if isinstance(content, str) else 0
 
 
-def estimate_context_chars(messages: List[Dict[str, Any]]) -> int:
+def estimate_context_chars(messages: list[dict[str, Any]]) -> int:
     """Estimate total character count across all messages."""
     return sum(estimate_message_chars(m) for m in messages)
 
 
-def _find_first_user_index(messages: List[Dict[str, Any]]) -> Optional[int]:
+def _find_first_user_index(messages: list[dict[str, Any]]) -> int | None:
     """Find the index of the first user message."""
     for i, msg in enumerate(messages):
         if msg.get("role") == "user":
@@ -86,8 +86,8 @@ def _find_first_user_index(messages: List[Dict[str, Any]]) -> Optional[int]:
 
 
 def _find_assistant_cutoff_index(
-    messages: List[Dict[str, Any]], keep_last: int
-) -> Optional[int]:
+    messages: list[dict[str, Any]], keep_last: int
+) -> int | None:
     """Find the index of the Nth-from-last assistant message.
 
     Everything from this index onward is protected from pruning.
@@ -106,8 +106,8 @@ def _find_assistant_cutoff_index(
 
 
 def _get_tool_name_for_result(
-    messages: List[Dict[str, Any]], tool_msg_index: int
-) -> Optional[str]:
+    messages: list[dict[str, Any]], tool_msg_index: int
+) -> str | None:
     """Look up the tool name for a tool result message.
 
     Walks backward from the tool result to find the preceding assistant
@@ -128,7 +128,7 @@ def _get_tool_name_for_result(
     return None
 
 
-def _soft_trim_content(content: str) -> Optional[str]:
+def _soft_trim_content(content: str) -> str | None:
     """Soft-trim a tool result's content: keep head + tail, replace middle.
 
     Returns None if no trimming needed (content is small enough).
@@ -147,8 +147,8 @@ def _soft_trim_content(content: str) -> Optional[str]:
 
 
 def prune_context(
-    messages: List[Dict[str, Any]], context_window_tokens: int
-) -> List[Dict[str, Any]]:
+    messages: list[dict[str, Any]], context_window_tokens: int
+) -> list[dict[str, Any]]:
     """Prune old tool results to manage context window usage.
 
     Phase 1 (soft trim): When context exceeds SOFT_TRIM_RATIO, trim large
@@ -184,7 +184,7 @@ def prune_context(
     prune_start = first_user if first_user is not None else len(messages)
 
     # Build list of prunable tool result indices
-    prunable_indices: List[int] = []
+    prunable_indices: list[int] = []
     for i in range(prune_start, cutoff_index):
         msg = messages[i]
         if msg.get("role") != "tool":
