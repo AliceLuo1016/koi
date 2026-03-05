@@ -19,7 +19,7 @@ Terminal-based AI agent with persistent memory, tool calling, extensible skills,
 
 ## Quick Start
 
-See **[BEST-PRACTICES.md](BEST-PRACTICES.md)** for a step-by-step getting started guide, configuration, and practical examples.
+See **[BEST-PRACTICES.md](BEST-PRACTICES.md)** for installation, configuration, adding skills, and example workflows.
 
 ```bash
 cd ~/koi && pip install .     # Install
