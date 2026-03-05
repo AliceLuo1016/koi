@@ -9,5 +9,6 @@ __pycache__/
 dist/
 build/
 CLAUDE.md
+local_data/
 
 .coverage
