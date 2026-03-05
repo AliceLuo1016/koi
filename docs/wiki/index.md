@@ -8,9 +8,10 @@ Koi is a terminal-based AI agent with persistent memory, tool calling, extensibl
 CLI (cli.py)
   └── Agent (agent.py) — conversation loop, commands, streaming display
         ├── LLMClient (llm.py) — 3 API formats, thinking, caching, streaming
-        ├── ToolExecutor (tools.py) — 15+ built-in tools
+        ├── ToolExecutor (tools.py) — 20+ built-in tools
         ├── SkillsManager (skills.py) — markdown-based extensible skills
-        ├── SubagentManager (subagent.py) — parallel child agents
+        ├── SubagentManager (subagent.py) — parallel child agents + ACP agents
+        ├── SessionManager (session_manager.py) — persistent sessions with branching
         ├── ContextCompactor (compaction.py) — LLM-based summarization
         ├── Sandbox (sandbox.py) — file/command security
         └── TranscriptLogger (transcript.py) — debug logging
@@ -26,7 +27,9 @@ CLI (cli.py)
 ### Features
 - [Tool System](tools.md) — Built-in tools, execution, result formatting
 - [Skills System](skills.md) — Markdown-based extensible capabilities
-- [Sub-Agents](subagents.md) — Spawning parallel child agents
+- [Sub-Agents](subagents.md) — Spawning parallel child agents and ACP agents
+- [Session Management](sessions.md) — Persistent sessions with in-place branching
+- [Usage Tracking](usage.md) — Token counting, cost estimation, usage logs
 - [Context Management](context-management.md) — 4-layer context budget system
 - [Cron Integration](cron.md) — Scheduling AI tasks
 
@@ -39,21 +42,25 @@ CLI (cli.py)
 
 | Component | File | Lines |
 |-----------|------|-------|
-| LLM Client | `llm.py` | ~1,400 |
+| LLM Client | `llm.py` | ~1,340 |
 | Tools | `tools.py` | ~1,100 |
-| CLI | `cli.py` | ~950 |
-| Agent | `agent.py` | ~780 |
-| Sub-Agents | `subagent.py` | ~540 |
+| CLI | `cli.py` | ~990 |
+| Agent | `agent.py` | ~950 |
+| Sub-Agents | `subagent.py` | ~550 |
+| Session Manager | `session_manager.py` | ~345 |
 | Prompts | `prompts.py` | ~320 |
 | ACP Client | `acp_client.py` | ~275 |
 | Cron | `cron.py` | ~245 |
 | Context Pruning | `context_pruning.py` | ~230 |
 | Config | `config.py` | ~230 |
+| Errors | `errors.py` | ~225 |
 | Usage Tracking | `usage.py` | ~215 |
 | Compaction | `compaction.py` | ~190 |
 | Context Guard | `context_guard.py` | ~170 |
 | Skills | `skills.py` | ~125 |
 | Sandbox | `sandbox.py` | ~120 |
 | Sessions | `sessions.py` | ~115 |
+| ACP Registry | `acp_registry.py` | ~90 |
 | Transcript | `transcript.py` | ~70 |
-| **Total** | | **~7,300** |
+| Stream Events | `stream_events.py` | ~35 |
+| **Total** | | **~8,100** |

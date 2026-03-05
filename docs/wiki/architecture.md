@@ -15,7 +15,8 @@ Koi has 4 main layers:
 ├─────────────────────────────────────────────┤
 │  Service Layer                              │
 │  ToolExecutor │ Skills │ SubagentManager    │
-│  Compactor │ Sandbox │ TranscriptLogger     │
+│  SessionManager │ Compactor │ Sandbox       │
+│  TranscriptLogger │ UsageTracker            │
 ├─────────────────────────────────────────────┤
 │  LLM Layer (llm.py)                         │
 │  3 API formats, thinking, caching, stream   │

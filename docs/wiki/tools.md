@@ -70,7 +70,7 @@ The definitions are format-agnostic — `LLMClient` converts them at call time:
 | Tool | Description | Key Params |
 |------|-------------|------------|
 | `web_fetch` | Fetch URL, parse HTML to text with BeautifulSoup. | `url` |
-| `web_search` | Placeholder (returns TODO). | `query` |
+| `web_search` | Web search (stub — returns TODO, ready for provider integration). | `query` |
 
 ### Memory & Skills
 
