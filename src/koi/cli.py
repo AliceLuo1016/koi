@@ -20,6 +20,7 @@ from .config import (
 from .cron import CronManager
 from .llm import LLMClient
 from .memory import Memory
+from .migrations import CURRENT_PROJECT_VERSION, run_upgrade
 from .skills import SkillsManager
 
 console = Console()
@@ -528,9 +529,49 @@ commands:
                 "fixing API settings to auto-generate)\n"
             )
 
+    # Write version file
+    (koi_dir / "version").write_text(CURRENT_PROJECT_VERSION)
+
     console.print(
         f"\n✅ Koi {'updated' if existing else 'initialized'}!",
         style="green",
+    )
+
+
+@main.command()
+def upgrade():
+    """Upgrade .koi/ project files to the latest version."""
+    koi_dir = Path.cwd() / ".koi"
+    if not koi_dir.exists():
+        console.print("No .koi/ directory found. Run `koi init` first.", style="red")
+        return
+
+    version_file = koi_dir / "version"
+    current = version_file.read_text().strip() if version_file.exists() else "0.1.0"
+
+    if current >= CURRENT_PROJECT_VERSION:
+        console.print(f"Already up to date (v{current})", style="green")
+        return
+
+    console.print(f"Upgrading .koi/ from v{current} to v{CURRENT_PROJECT_VERSION}...\n")
+
+    old_version, new_version, results = run_upgrade(koi_dir)
+
+    for version, changes in results:
+        console.print(f"v{version}:")
+        for change in changes:
+            # Warnings (customized files) use a different marker
+            if change.startswith("AGENTS.md has been customized"):
+                lines = change.split("\n")
+                console.print(f"  ⚠ {lines[0]}", style="yellow")
+                for line in lines[1:]:
+                    console.print(f"  {line}", style="yellow")
+            else:
+                console.print(f"  ✓ {change}", style="green")
+        console.print()
+
+    console.print(
+        f"Upgrade complete! (v{old_version} → v{new_version})", style="bold green"
     )
 
 
