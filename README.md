@@ -14,6 +14,8 @@ Terminal-based AI agent with persistent memory, tool calling, extensible skills,
 - **Context Management** — 4-layer system: truncation → pruning → compaction → guard
 - **Prompt Caching** — ~90% input token savings on Anthropic
 - **Sub-Agents** — Spawn isolated child processes for parallel work
+- **ACP Agent Support** — Spawn external coding agents (Claude Code, Codex, Gemini, etc.) via Agent Client Protocol
+- **Session Management** — Persistent sessions with in-place branching via parentId chains
 - **Streaming** — Real-time token display for all API formats
 - **Rich Terminal UI** — Markdown rendering, multi-line input (Escape+Enter)
 
@@ -37,7 +39,7 @@ See **[BEST-PRACTICES.md](BEST-PRACTICES.md)** for a step-by-step getting starte
 
 **Chat (during `koi run`):**
 
-`/help` · `/exit` · `/memory` · `/remember TEXT` · `/skills` · `/compact` · `/stats`
+`/help` · `/exit` · `/quit` · `/memory` · `/remember TEXT` · `/skills` · `/compact` · `/stats` · `/usage` · `/new` · `/fork`
 
 ## Tools
 
@@ -46,14 +48,18 @@ See **[BEST-PRACTICES.md](BEST-PRACTICES.md)** for a step-by-step getting starte
 | `read_file` | Read files (with offset/limit for large files) |
 | `write_file` | Create or overwrite files |
 | `edit_file` | Surgical find-and-replace |
+| `remove_file` | Delete files |
 | `exec_command` | Execute shell commands (sandboxed) |
 | `glob_files` | Find files by pattern |
 | `grep_files` | Search file contents |
+| `web_search` | Search the web |
 | `web_fetch` | Fetch web pages as markdown |
 | `update_memory` | Persist info across sessions |
 | `read_skill` | Load skill definitions |
 | `create_alert` / `list_alerts` / `resolve_alert` | Structured alert management |
-| `spawn_subagent` / `list_subagents` / `kill_subagent` | Sub-agent orchestration |
+| `add_cron_job` / `list_cron_jobs` / `remove_cron_job` | Cron job management |
+| `spawn_subagent` / `send_to_subagent` / `list_subagents` / `kill_subagent` | Sub-agent orchestration |
+| `list_available_agents` | Discover installed ACP agents |
 
 ## Sandbox Security
 
@@ -90,21 +96,29 @@ Output goes to `.koi/cron-logs/`. Full `koi` path is resolved automatically for 
 
 ```
 src/koi/
-├── cli.py           # Click CLI (init, run, cron, skills, config, memory)
-├── agent.py         # Async conversation loop + tool execution
-├── llm.py           # Multi-provider LLM client (Responses/Chat Completions/Anthropic)
-├── tools.py         # Tool definitions + sandboxed executor
-├── sandbox.py       # 3-layer security enforcement
-├── memory.py        # Persistent memory via .koi/MEMORY.md
-├── skills.py        # Skill discovery and loading
-├── config.py        # Configuration management
-├── compaction.py    # Context compaction via LLM summarization
-├── context_guard.py # Pre-call context window safety net
+├── cli.py             # Click CLI (init, run, cron, skills, config, memory)
+├── agent.py           # Async conversation loop + tool execution
+├── llm.py             # Multi-provider LLM client (Responses/Chat Completions/Anthropic)
+├── tools.py           # Tool definitions + sandboxed executor
+├── sandbox.py         # 3-layer security enforcement
+├── memory.py          # Persistent memory via .koi/MEMORY.md
+├── skills.py          # Skill discovery and loading
+├── config.py          # Configuration management
+├── compaction.py      # Context compaction via LLM summarization
+├── context_guard.py   # Pre-call context window safety net
 ├── context_pruning.py # Two-phase message pruning
-├── subagent.py      # Sub-agent spawning and orchestration
-├── usage.py         # Token usage tracking
-├── prompts.py       # System prompt assembly (12 structured sections)
-└── cron.py          # System crontab management
+├── subagent.py        # Sub-agent spawning and orchestration
+├── acp_client.py      # ACP agent client (Claude Code, Codex, Gemini, etc.)
+├── acp_registry.py    # ACP agent discovery and configuration
+├── session_manager.py # Session persistence with branching support
+├── sessions.py        # Session listing and selection
+├── stream_events.py   # Streaming event handling
+├── server.py          # Optional HTTP/Slack server interface
+├── transcript.py      # Session transcript utilities
+├── usage.py           # Token usage tracking
+├── errors.py          # Error types
+├── prompts.py         # System prompt assembly (12 structured sections)
+└── cron.py            # System crontab management
 ```
 
 **Key patterns:**
@@ -116,7 +130,7 @@ src/koi/
 
 ```bash
 pip install ".[dev]"          # Install with dev deps
-pytest tests/ -v              # Run tests (494 tests, 0 failures)
+pytest tests/ -v              # Run tests (721 tests, 0 failures)
 black src/ tests/             # Format (line-length 88, target py39)
 ruff check src/ tests/        # Lint (rules: E, F, W, I, N, UP)
 ```
