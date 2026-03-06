@@ -55,9 +55,7 @@ def _get_anthropic_model_max(model: str) -> int:
     return _ANTHROPIC_MODEL_MAX_TOKENS_DEFAULT
 
 
-def _adjust_max_tokens_for_thinking(
-    base_max: int, budget: int, model_max: int = 64000
-) -> tuple:
+def _adjust_max_tokens_for_thinking(base_max: int, budget: int, model_max: int = 64000) -> tuple:
     """Adjust max_tokens so it covers both thinking budget and output.
 
     Returns (max_tokens, budget) where max_tokens = min(base_max + budget, model_max).
@@ -159,18 +157,14 @@ class LLMClient:
         self.usage = TokenUsage()
         # try stream_options.include_usage; disable on error
         self._stream_include_usage = True
-        self.use_reasoning_tags = uses_reasoning_tags(
-            config.model, config.api_format, config.thinking_level
-        )
+        self.use_reasoning_tags = uses_reasoning_tags(config.model, config.api_format, config.thinking_level)
         if config.api_format == "anthropic":
             self.headers = {
                 "Content-Type": "application/json",
                 "x-api-key": config.api_key,
                 "anthropic-version": "2023-06-01",
             }
-            if config.thinking_level != "off" and supports_thinking(
-                config.model, config.api_format
-            ):
+            if config.thinking_level != "off" and supports_thinking(config.model, config.api_format):
                 self.headers["anthropic-beta"] = "interleaved-thinking-2025-05-14"
         else:
             self.headers = {
@@ -188,9 +182,7 @@ class LLMClient:
 
     # ── Format conversion helpers ──
 
-    def _convert_messages_to_input(
-        self, messages: list[dict[str, Any]], system_prompt: str | None = None
-    ) -> tuple:
+    def _convert_messages_to_input(self, messages: list[dict[str, Any]], system_prompt: str | None = None) -> tuple:
         """Convert Chat Completions messages → (instructions, input).
 
         Returns (instructions, input_items) where *instructions* is the
@@ -380,9 +372,7 @@ class LLMClient:
 
     # ── Anthropic Messages API helpers ──
 
-    def _convert_messages_to_anthropic(
-        self, messages: list[dict[str, Any]], system_prompt: str | None = None
-    ) -> tuple:
+    def _convert_messages_to_anthropic(self, messages: list[dict[str, Any]], system_prompt: str | None = None) -> tuple:
         """Convert Chat Completions messages → (system, anthropic_messages).
 
         Returns (system_prompt, messages) in Anthropic Messages API format.
@@ -458,9 +448,7 @@ class LLMClient:
 
         return system_prompt, anthropic_msgs
 
-    def _convert_anthropic_tools(
-        self, tools: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _convert_anthropic_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Convert OpenAI tool defs → Anthropic tool format."""
         converted = []
         for tool in tools:
@@ -595,9 +583,7 @@ class LLMClient:
                 message["tool_calls"] = list(tool_calls.values())
             return {"choices": [{"message": message, "finish_reason": "stop"}]}
 
-        instructions, input_items = self._convert_messages_to_input(
-            messages, system_prompt=system_prompt
-        )
+        instructions, input_items = self._convert_messages_to_input(messages, system_prompt=system_prompt)
 
         payload: dict[str, Any] = {
             "model": self.config.model,
@@ -667,12 +653,8 @@ class LLMClient:
         system_prompt: str | None = None,
     ) -> dict[str, Any]:
         """Send a request to the Anthropic Messages API."""
-        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(
-            messages, system_prompt=system_prompt
-        )
-        system_value, anthropic_msgs = self._apply_prompt_caching(
-            system_prompt, anthropic_msgs
-        )
+        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(messages, system_prompt=system_prompt)
+        system_value, anthropic_msgs = self._apply_prompt_caching(system_prompt, anthropic_msgs)
 
         payload: dict[str, Any] = {
             "model": self.config.model,
@@ -687,9 +669,7 @@ class LLMClient:
             thinking_level = self.config.thinking_level
             budget = _ANTHROPIC_THINKING_BUDGETS.get(thinking_level, 2048)
             model_max = _get_anthropic_model_max(self.config.model)
-            adjusted_max, budget = _adjust_max_tokens_for_thinking(
-                self.config.max_tokens, budget, model_max
-            )
+            adjusted_max, budget = _adjust_max_tokens_for_thinking(self.config.max_tokens, budget, model_max)
             payload["max_tokens"] = adjusted_max
             payload["thinking"] = {
                 "type": "enabled",
@@ -744,9 +724,7 @@ class LLMClient:
 
             return {"choices": [{"message": message, "finish_reason": "stop"}]}
 
-        return await self._post_with_retries(
-            url, payload, self._convert_anthropic_response
-        )
+        return await self._post_with_retries(url, payload, self._convert_anthropic_response)
 
     async def _chat_completions(
         self,
@@ -816,9 +794,7 @@ class LLMClient:
         last_error = None
         for attempt in range(self.MAX_RETRIES):
             try:
-                response = await self.client.post(
-                    url, headers=self.headers, json=payload
-                )
+                response = await self.client.post(url, headers=self.headers, json=payload)
                 response.raise_for_status()
                 return convert_fn(response.json())
 
@@ -842,9 +818,7 @@ class LLMClient:
                 retry_delay = extract_retry_delay(error_text, headers_dict)
 
                 # Classify the error
-                classified = classify_http_error(
-                    e.response.status_code, error_text, retry_after=retry_delay
-                )
+                classified = classify_http_error(e.response.status_code, error_text, retry_after=retry_delay)
                 last_error = classified
 
                 if not classified.retryable:
@@ -853,19 +827,13 @@ class LLMClient:
                 # Check max retry delay cap
                 if retry_delay and retry_delay > self.MAX_RETRY_DELAY:
                     raise KoiRateLimitError(
-                        f"Rate limited — server wants "
-                        f"{retry_delay:.0f}s wait "
-                        f"(max: {self.MAX_RETRY_DELAY}s)",
+                        f"Rate limited — server wants {retry_delay:.0f}s wait (max: {self.MAX_RETRY_DELAY}s)",
                         status_code=e.response.status_code,
                         error_text=error_text,
                         retry_after=retry_delay,
                     )
 
-                delay = (
-                    retry_delay
-                    if retry_delay
-                    else min(2 ** (attempt + 1), self.MAX_BACKOFF)
-                )
+                delay = retry_delay if retry_delay else min(2 ** (attempt + 1), self.MAX_BACKOFF)
                 await asyncio.sleep(delay)
 
             except (httpx.ConnectError, httpx.ReadTimeout) as e:
@@ -932,9 +900,7 @@ class LLMClient:
         It handles SSE parsing and yields structured events; the consumer
         handles accumulation and response assembly.
         """
-        instructions, input_items = self._convert_messages_to_input(
-            messages, system_prompt=system_prompt
-        )
+        instructions, input_items = self._convert_messages_to_input(messages, system_prompt=system_prompt)
 
         payload: dict[str, Any] = {
             "model": self.config.model,
@@ -964,11 +930,11 @@ class LLMClient:
         completed = False
 
         try:
-            async with self.client.stream(
-                "POST", url, headers=self.headers, json=payload
-            ) as response:
+            async with self.client.stream("POST", url, headers=self.headers, json=payload) as response:
                 self._active_stream_response = response
                 try:
+                    if response.is_error:
+                        await response.aread()
                     response.raise_for_status()
 
                     async for line in response.aiter_lines():
@@ -1027,12 +993,8 @@ class LLMClient:
                                     yield StreamEvent(
                                         type="usage",
                                         usage={
-                                            "input_tokens": usage.get(
-                                                "input_tokens", 0
-                                            ),
-                                            "output_tokens": usage.get(
-                                                "output_tokens", 0
-                                            ),
+                                            "input_tokens": usage.get("input_tokens", 0),
+                                            "output_tokens": usage.get("output_tokens", 0),
                                         },
                                     )
                                 completed = True
@@ -1085,15 +1047,16 @@ class LLMClient:
         # stream_options negotiation: try with include_usage; if 400, disable and retry
         if self._stream_include_usage and payload.get("stream_options"):
             try:
-                async with self.client.stream(
-                    "POST", url, headers=self.headers, json=payload
-                ) as response:
+                async with self.client.stream("POST", url, headers=self.headers, json=payload) as response:
                     self._active_stream_response = response
                     try:
                         if response.status_code == 400:
+                            await response.aread()
                             self._stream_include_usage = False
                             payload.pop("stream_options", None)
                         else:
+                            if response.is_error:
+                                await response.aread()
                             response.raise_for_status()
                             async for event in self._parse_cc_sse(response):
                                 yield event
@@ -1111,11 +1074,11 @@ class LLMClient:
         seen_indices: set = set()
 
         try:
-            async with self.client.stream(
-                "POST", url, headers=self.headers, json=payload
-            ) as response:
+            async with self.client.stream("POST", url, headers=self.headers, json=payload) as response:
                 self._active_stream_response = response
                 try:
+                    if response.is_error:
+                        await response.aread()
                     response.raise_for_status()
 
                     async for line in response.aiter_lines():
@@ -1138,9 +1101,7 @@ class LLMClient:
                                 type="usage",
                                 usage={
                                     "prompt_tokens": usage.get("prompt_tokens", 0),
-                                    "completion_tokens": usage.get(
-                                        "completion_tokens", 0
-                                    ),
+                                    "completion_tokens": usage.get("completion_tokens", 0),
                                 },
                             )
                             usage_found = True
@@ -1163,9 +1124,7 @@ class LLMClient:
                                     type="toolcall_start",
                                     content_index=idx,
                                     tool_call_id=tc_delta.get("id", ""),
-                                    tool_name=tc_delta.get("function", {}).get(
-                                        "name", ""
-                                    ),
+                                    tool_name=tc_delta.get("function", {}).get("name", ""),
                                 )
                             func = tc_delta.get("function", {})
                             if func.get("arguments"):
@@ -1201,9 +1160,7 @@ class LLMClient:
 
         yield StreamEvent(type="done")
 
-    async def _parse_cc_sse(
-        self, response: httpx.Response
-    ) -> AsyncGenerator[StreamEvent, None]:
+    async def _parse_cc_sse(self, response: httpx.Response) -> AsyncGenerator[StreamEvent, None]:
         """Parse CC SSE lines from an already-opened response."""
         content_len = 0
         tool_args_len = 0
@@ -1287,12 +1244,8 @@ class LLMClient:
         SSE parsing and yields structured events; the consumer handles
         accumulation and response assembly.
         """
-        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(
-            messages, system_prompt=system_prompt
-        )
-        system_value, anthropic_msgs = self._apply_prompt_caching(
-            system_prompt, anthropic_msgs
-        )
+        system_prompt, anthropic_msgs = self._convert_messages_to_anthropic(messages, system_prompt=system_prompt)
+        system_value, anthropic_msgs = self._apply_prompt_caching(system_prompt, anthropic_msgs)
 
         payload: dict[str, Any] = {
             "model": self.config.model,
@@ -1308,9 +1261,7 @@ class LLMClient:
             thinking_level = self.config.thinking_level
             budget = _ANTHROPIC_THINKING_BUDGETS.get(thinking_level, 2048)
             model_max = _get_anthropic_model_max(self.config.model)
-            adjusted_max, budget = _adjust_max_tokens_for_thinking(
-                self.config.max_tokens, budget, model_max
-            )
+            adjusted_max, budget = _adjust_max_tokens_for_thinking(self.config.max_tokens, budget, model_max)
             payload["max_tokens"] = adjusted_max
             payload["thinking"] = {
                 "type": "enabled",
@@ -1333,11 +1284,11 @@ class LLMClient:
         block_meta: dict[int, dict] = {}  # index → {name, id}
 
         try:
-            async with self.client.stream(
-                "POST", url, headers=self.headers, json=payload
-            ) as response:
+            async with self.client.stream("POST", url, headers=self.headers, json=payload) as response:
                 self._active_stream_response = response
                 try:
+                    if response.is_error:
+                        await response.aread()
                     response.raise_for_status()
 
                     async for line in response.aiter_lines():
@@ -1406,9 +1357,7 @@ class LLMClient:
                                 )
                             elif delta_type == "thinking_delta":
                                 thinking = delta.get("thinking", "")
-                                block_content[idx] = (
-                                    block_content.get(idx, "") + thinking
-                                )
+                                block_content[idx] = block_content.get(idx, "") + thinking
                                 yield StreamEvent(
                                     type="thinking_delta",
                                     content_index=idx,

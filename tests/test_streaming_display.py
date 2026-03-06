@@ -21,6 +21,13 @@ class _MockStreamResponse:
         self.status_code = status_code
         self.headers = {}
 
+    @property
+    def is_error(self):
+        return self.status_code >= 400
+
+    async def aread(self):
+        pass
+
     def raise_for_status(self):
         if self.status_code >= 400:
             mock_req = MagicMock()

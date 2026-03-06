@@ -399,6 +399,13 @@ async def test_streaming_anthropic_applies_cache_control():
             self.status_code = 200
             self.headers = {}
 
+        @property
+        def is_error(self):
+            return self.status_code >= 400
+
+        async def aread(self):
+            pass
+
         def raise_for_status(self):
             pass
 
