@@ -1396,3 +1396,61 @@ async def test_stream_chat_general_exception_raises_runtime_error(client):
         async for _ in client.stream_chat([{"role": "user", "content": "hi"}]):
             pass
     await client.close()
+
+
+# ── Streaming error-status tests (raise_for_status inside stream context) ──
+
+
+@pytest.mark.asyncio
+async def test_stream_responses_error_status_inside_context(client):
+    """Responses streaming: error status inside async-with must not crash on .text access.
+
+    Regression test for: 'Attempted to access streaming response content,
+    without having called read()'.
+    """
+    from koi.errors import KoiServerError
+
+    client.client.stream = lambda *a, **kw: _StreamCtx([], status_code=500)
+    with pytest.raises(KoiServerError):
+        async for _ in client.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_cc_error_status_inside_context(cc_client):
+    """CC streaming: error status inside async-with must not crash on .text access.
+
+    Regression test for: 'Attempted to access streaming response content,
+    without having called read()'.
+    """
+    from koi.errors import KoiServerError
+
+    cc_client.client.stream = lambda *a, **kw: _StreamCtx([], status_code=502)
+    with pytest.raises(KoiServerError):
+        async for _ in cc_client.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    await cc_client.close()
+
+
+@pytest.mark.asyncio
+async def test_stream_anthropic_error_status_inside_context():
+    """Anthropic streaming: error status inside async-with must not crash on .text access.
+
+    Regression test for: 'Attempted to access streaming response content,
+    without having called read()'.
+    """
+    from koi.errors import KoiServerError
+
+    config = Config(
+        api_base="https://api.anthropic.com/v1/messages",
+        api_key="test-key",
+        model="claude-3",
+        api_format="anthropic",
+    )
+    anthro_client = LLMClient(config)
+    anthro_client.client.stream = lambda *a, **kw: _StreamCtx([], status_code=500)
+    with pytest.raises(KoiServerError):
+        async for _ in anthro_client.stream_chat([{"role": "user", "content": "hi"}]):
+            pass
+    await anthro_client.close()
